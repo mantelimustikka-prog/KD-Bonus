@@ -417,6 +417,7 @@ class KD_Bonus_Rewards {
 	 * Persist redemption metadata on orders.
 	 *
 	 * @param WC_Order $order Order object.
+	 * @param array    $data Posted checkout data.
 	 */
 	public function store_checkout_redemption_on_order( $order, $data = array() ) {
 		if ( ! $order instanceof WC_Order || ! is_user_logged_in() ) {
@@ -462,8 +463,7 @@ class KD_Bonus_Rewards {
 
 		$this->settle_redemption_for_order( $order, $user_id );
 
-		$lifetime_after = $lifetime_before + $eligible_subtotal;
-		update_user_meta( $user_id, self::LIFETIME_SPEND_META, wc_format_decimal( $lifetime_after ) );
+		$lifetime_after = $this->adjust_lifetime_spend( $user_id, $eligible_subtotal );
 
 		$status_after   = $this->get_status_for_spend( $lifetime_after );
 		$reward_percent = (float) $status_after['reward_percent'];
@@ -531,8 +531,7 @@ class KD_Bonus_Rewards {
 
 		$eligible_subtotal = (float) $order->get_meta( '_kd_bonus_eligible_subtotal', true );
 		if ( $eligible_subtotal > 0 ) {
-			$new_lifetime = $this->get_lifetime_spend( $user_id ) - $eligible_subtotal;
-			update_user_meta( $user_id, self::LIFETIME_SPEND_META, wc_format_decimal( max( 0, $new_lifetime ) ) );
+			$this->adjust_lifetime_spend( $user_id, -1 * $eligible_subtotal, false );
 		}
 
 		$earned_amount = (float) $order->get_meta( '_kd_bonus_earned_amount', true );
@@ -634,10 +633,7 @@ class KD_Bonus_Rewards {
 	 * @return float
 	 */
 	private function adjust_balance( $user_id, $delta, $type, $context = array() ) {
-		$current_balance = $this->get_balance( $user_id );
-		$new_balance     = round( $current_balance + (float) $delta, wc_get_price_decimals() );
-
-		update_user_meta( $user_id, self::BALANCE_META, wc_format_decimal( $new_balance ) );
+		$new_balance = $this->atomic_adjust_user_meta_decimal( $user_id, self::BALANCE_META, (float) $delta );
 
 		$this->insert_transaction(
 			array(
@@ -653,6 +649,60 @@ class KD_Bonus_Rewards {
 		);
 
 		return $new_balance;
+	}
+
+	/**
+	 * Atomically adjust lifetime spend.
+	 *
+	 * @param int   $user_id User ID.
+	 * @param float $delta Spend delta.
+	 * @param bool  $allow_negative Whether negative totals are allowed.
+	 * @return float
+	 */
+	private function adjust_lifetime_spend( $user_id, $delta, $allow_negative = true ) {
+		return $this->atomic_adjust_user_meta_decimal( $user_id, self::LIFETIME_SPEND_META, (float) $delta, $allow_negative );
+	}
+
+	/**
+	 * Atomically adjust a decimal user meta value.
+	 *
+	 * @param int    $user_id User ID.
+	 * @param string $meta_key Meta key.
+	 * @param float  $delta Delta amount.
+	 * @param bool   $allow_negative Whether the resulting total may be negative.
+	 * @return float
+	 */
+	private function atomic_adjust_user_meta_decimal( $user_id, $meta_key, $delta, $allow_negative = true ) {
+		global $wpdb;
+
+		$lock_key      = 'kd_bonus_meta_' . md5( $user_id . '|' . $meta_key );
+		$lock_acquired = (int) $wpdb->get_var( $wpdb->prepare( 'SELECT GET_LOCK(%s, 5)', $lock_key ) );
+
+		if ( 1 !== $lock_acquired ) {
+			return (float) get_user_meta( $user_id, $meta_key, true );
+		}
+
+		if ( ! metadata_exists( 'user', $user_id, $meta_key ) ) {
+			add_user_meta( $user_id, $meta_key, '0', true );
+		}
+
+		$delta_sql  = number_format( (float) $delta, 4, '.', '' );
+		$expression = $allow_negative ? 'ROUND(CAST(meta_value AS DECIMAL(18,4)) + %s, 4)' : 'GREATEST(0, ROUND(CAST(meta_value AS DECIMAL(18,4)) + %s, 4))';
+		$query      = $wpdb->prepare(
+			"UPDATE {$wpdb->usermeta}
+			SET meta_value = {$expression}
+			WHERE user_id = %d
+				AND meta_key = %s",
+			$delta_sql,
+			$user_id,
+			$meta_key
+		);
+
+		$wpdb->query( $query ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		$value = (float) get_user_meta( $user_id, $meta_key, true );
+		$wpdb->query( $wpdb->prepare( 'SELECT RELEASE_LOCK(%s)', $lock_key ) );
+
+		return $value;
 	}
 
 	/**
@@ -701,7 +751,7 @@ class KD_Bonus_Rewards {
 
 		$replacements = array(
 			'{customer_name}' => $user->display_name ?: $user->user_login,
-			'{reward_amount}' => $earned_amount,
+			'{reward_amount}' => $this->format_reward_amount( $earned_amount ),
 			'{reward_symbol}' => $settings['reward_symbol'],
 			'{order_number}'  => $order->get_order_number(),
 			'{balance_amount}' => $this->format_reward_amount( $balance ),

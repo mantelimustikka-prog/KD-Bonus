@@ -128,7 +128,7 @@ class KD_Bonus_Settings {
 			<h1><?php esc_html_e( 'KD Bonus Network Settings', 'kd-bonus' ); ?></h1>
 			<nav class="nav-tab-wrapper">
 				<?php foreach ( $tabs as $tab_key => $label ) : ?>
-					<a class="nav-tab <?php echo $tab_key === $tab ? 'nav-tab-active' : ''; ?>" href="<?php echo esc_url( network_admin_url( 'settings.php?page=kd-bonus&tab=' . $tab_key ) ); ?>">
+					<a class="nav-tab <?php echo esc_attr( $tab_key === $tab ? 'nav-tab-active' : '' ); ?>" href="<?php echo esc_url( network_admin_url( 'settings.php?page=kd-bonus&tab=' . $tab_key ) ); ?>">
 						<?php echo esc_html( $label ); ?>
 					</a>
 				<?php endforeach; ?>

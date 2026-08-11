@@ -66,6 +66,7 @@ class KD_Bonus_Dashboard {
 		$current_currency  = get_woocommerce_currency();
 		$discount_value    = $this->rewards->convert_from_base( $available_balance, $current_currency, array( 'context' => 'dashboard' ) );
 		$reward_name       = $settings['reward_name'] ?: __( 'Reward Balance', 'kd-bonus' );
+		$reward_symbol     = $settings['reward_symbol'] ?: '$KD';
 
 		ob_start();
 		?>
@@ -93,7 +94,7 @@ class KD_Bonus_Dashboard {
 					<p><?php echo esc_html( wc_format_decimal( (float) $status['reward_percent'], 2 ) . '%' ); ?></p>
 				</div>
 				<div class="kd-bonus-dashboard__card" style="padding:16px;border:1px solid #dcdcde;border-radius:8px;">
-					<strong><?php esc_html_e( 'Available $KD', 'kd-bonus' ); ?></strong>
+					<strong><?php echo esc_html( sprintf( __( 'Available %s', 'kd-bonus' ), $reward_symbol ) ); ?></strong>
 					<p><?php echo esc_html( $this->rewards->format_reward_amount( $available_balance ) ); ?></p>
 				</div>
 			</div>

@@ -116,18 +116,26 @@ class KD_Bonus_Plugin {
 	 * Ensure dashboard pages exist across all network sites.
 	 */
 	public static function ensure_dashboard_pages_for_all_sites() {
-		$sites = get_sites(
-			array(
-				'number' => 0,
-				'fields' => 'ids',
-			)
-		);
+		$offset = 0;
+		$limit  = 100;
 
-		foreach ( $sites as $site_id ) {
-			switch_to_blog( (int) $site_id );
-			self::ensure_dashboard_page();
-			restore_current_blog();
-		}
+		do {
+			$sites = get_sites(
+				array(
+					'number' => $limit,
+					'offset' => $offset,
+					'fields' => 'ids',
+				)
+			);
+
+			foreach ( $sites as $site_id ) {
+				switch_to_blog( (int) $site_id );
+				self::ensure_dashboard_page();
+				restore_current_blog();
+			}
+
+			$offset += $limit;
+		} while ( count( $sites ) === $limit );
 	}
 
 	/**
