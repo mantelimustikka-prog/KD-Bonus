@@ -109,7 +109,38 @@ class KD_Bonus_Settings {
 	}
 
 	/**
-	 * Default settings.
+	 * Return the default membership status tiers.
+	 *
+	 * Kept as a separate method so it can be referenced by both {@see defaults()} and
+	 * {@see get_membership_statuses_table_html()} without creating a circular dependency.
+	 *
+	 * @return array<int,array<string,mixed>>
+	 */
+	private static function default_membership_statuses() {
+		return array(
+			array(
+				'priority'       => 10,
+				'name'           => 'Bronze',
+				'threshold'      => 0,
+				'reward_percent' => 1,
+			),
+			array(
+				'priority'       => 20,
+				'name'           => 'Silver',
+				'threshold'      => 500,
+				'reward_percent' => 2.5,
+			),
+			array(
+				'priority'       => 30,
+				'name'           => 'Gold',
+				'threshold'      => 1500,
+				'reward_percent' => 5,
+			),
+		);
+	}
+
+	/**
+	 * Return plugin default settings.
 	 *
 	 * @return array<string,mixed>
 	 */
@@ -127,31 +158,12 @@ class KD_Bonus_Settings {
 			'base_currency'              => '',
 			'email_notifications'        => 1,
 			'upgrade_email_subject'      => 'Your KD Bonus membership status was upgraded',
-			'upgrade_email_body'         => "Hi {customer_name},\n\nYour membership status is now {status_name}. Keep shopping to earn even more Kamagra Dollar rewards.\n",
+			'upgrade_email_body'         => "<p>Hi {customer_name},</p>\n<p>Your membership status is now {status_name}. Keep shopping to earn even more Kamagra Dollar rewards.</p>\n" . self::get_membership_statuses_table_html(),
 			'reward_email_subject'       => 'You earned new Kamagra Dollar rewards',
-			'reward_email_body'          => "Hi {customer_name},\n\nYou earned {reward_amount} {reward_symbol} from order #{order_number}. Your new balance is {balance_amount}.\n",
+			'reward_email_body'          => "<p>Hi {customer_name},</p>\n<p>You earned {reward_amount} {reward_symbol} from order #{order_number}. Your new balance is {balance_amount}.</p>\n" . self::get_membership_statuses_table_html(),
 			'new_user_reward_email_subject' => 'Welcome! Your new account reward is ready',
-			'new_user_reward_email_body'    => "Hi {customer_name},\n\nWelcome! You received {reward_amount} {reward_symbol} as a new account reward. Your balance is now {balance_amount}.\n",
-			'membership_statuses'        => array(
-				array(
-					'priority'       => 10,
-					'name'           => 'Bronze',
-					'threshold'      => 0,
-					'reward_percent' => 1,
-				),
-				array(
-					'priority'       => 20,
-					'name'           => 'Silver',
-					'threshold'      => 500,
-					'reward_percent' => 2.5,
-				),
-				array(
-					'priority'       => 30,
-					'name'           => 'Gold',
-					'threshold'      => 1500,
-					'reward_percent' => 5,
-				),
-			),
+			'new_user_reward_email_body'    => "<p>Hi {customer_name},</p>\n<p>Welcome! You received {reward_amount} {reward_symbol} as a new account reward. Your balance is now {balance_amount}.</p>\n" . self::get_membership_statuses_table_html(),
+			'membership_statuses'        => self::default_membership_statuses(),
 		);
 	}
 
@@ -862,5 +874,42 @@ class KD_Bonus_Settings {
 			</div>
 		<?php endif; ?>
 		<?php
+	}
+
+	/**
+	 * Return the default HTML for the "Membership Statuses" table used in email templates.
+	 *
+	 * The table is vertically centred and uses a light-yellow background so it stands
+	 * out in the email body. It is injected as a default only; admins can edit or remove
+	 * it freely via the GUI (wp_editor) on the Email Settings screen.
+	 *
+	 * @return string
+	 */
+	public static function get_membership_statuses_table_html() {
+		$rows = '';
+		foreach ( self::default_membership_statuses() as $tier ) {
+			$name    = isset( $tier['name'] ) ? $tier['name'] : '';
+			$thresh  = isset( $tier['threshold'] ) ? $tier['threshold'] : 0;
+			$percent = isset( $tier['reward_percent'] ) ? $tier['reward_percent'] : 0;
+			$rows   .= '<tr>'
+				. '<td style="background-color:#fff9c4;">' . esc_html( (string) $name ) . '</td>'
+				. '<td style="background-color:#fff9c4;">' . esc_html( (string) $thresh ) . '</td>'
+				. '<td style="background-color:#fff9c4;">' . esc_html( (string) $percent ) . '%</td>'
+				. '</tr>';
+		}
+
+		return '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 auto;border-collapse:collapse;">'
+			. '<tr><td align="center" valign="middle">'
+			. '<table role="presentation" cellspacing="0" cellpadding="8" border="1" '
+			. 'style="border-collapse:collapse;width:100%;max-width:600px;background-color:#fff9c4;">'
+			. '<thead><tr>'
+			. '<th style="text-align:left;background-color:#fff9c4;">Status</th>'
+			. '<th style="text-align:left;background-color:#fff9c4;">Required products spent</th>'
+			. '<th style="text-align:left;background-color:#fff9c4;">Reward percentage</th>'
+			. '</tr></thead>'
+			. '<tbody>' . $rows . '</tbody>'
+			. '</table>'
+			. '</td></tr>'
+			. '</table>';
 	}
 }
