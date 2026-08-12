@@ -138,6 +138,14 @@ class KD_Bonus_Rewards {
 			return;
 		}
 
+		if ( ! class_exists( 'WooCommerce' ) || ! function_exists( 'wc_get_orders' ) ) {
+			$this->mark_membership_rebuild_failed(
+				__( 'WooCommerce is required to rebuild memberships from historical spend.', 'kd-bonus' ),
+				array()
+			);
+			return;
+		}
+
 		global $wpdb;
 
 		$site_ids = array_map( 'absint', get_sites( array( 'fields' => 'ids' ) ) );
@@ -146,24 +154,12 @@ class KD_Bonus_Rewards {
 		}
 
 		$award_status = $this->get_award_order_status();
+		$status_slug  = $this->normalize_award_status_for_wc_query( $award_status );
 		$total_orders = 0;
 		foreach ( $site_ids as $site_id ) {
 			switch_to_blog( $site_id );
-			$total_orders += (int) $wpdb->get_var(
-				$wpdb->prepare(
-					"SELECT COUNT(1)
-					FROM {$wpdb->posts} p
-					INNER JOIN {$wpdb->postmeta} pm
-						ON pm.post_id = p.ID
-						AND pm.meta_key = %s
-					WHERE p.post_type = %s
-						AND p.post_status = %s
-						AND CAST(pm.meta_value AS UNSIGNED) > 0",
-					'_customer_user',
-					'shop_order',
-					$award_status
-				)
-			);
+			$page_data    = $this->get_orders_page_for_rebuild( $status_slug, 1, 1 );
+			$total_orders += (int) $page_data['total'];
 			restore_current_blog();
 		}
 
@@ -183,7 +179,7 @@ class KD_Bonus_Rewards {
 			'status_rebuild_processed' => 0,
 			'site_ids'                 => $site_ids,
 			'site_index'               => 0,
-			'last_order_id'            => 0,
+			'order_page'               => 1,
 			'award_status'             => $award_status,
 			'total_orders'             => $total_orders,
 			'processed_orders'         => 0,
@@ -409,7 +405,7 @@ class KD_Bonus_Rewards {
 			$current_threshold = isset( $current['threshold'] ) ? (float) $current['threshold'] : 0.0;
 			$current_priority  = isset( $current['priority'] ) ? (int) $current['priority'] : 0;
 
-			if ( $threshold > $current_threshold || ( $threshold === $current_threshold && $priority >= $current_priority ) ) {
+			if ( $threshold > $current_threshold || ( $threshold === $current_threshold && $priority > $current_priority ) ) {
 				$current = $status;
 			}
 		}
@@ -2063,8 +2059,20 @@ class KD_Bonus_Rewards {
 	 * Schedule the next batch run.
 	 */
 	private function schedule_membership_rebuild_batch() {
+		$main_site_id = function_exists( 'get_main_site_id' ) ? (int) get_main_site_id() : 0;
+		$current_id   = get_current_blog_id();
+		$switched     = $main_site_id > 0 && $main_site_id !== $current_id;
+
+		if ( $switched ) {
+			switch_to_blog( $main_site_id );
+		}
+
 		if ( ! wp_next_scheduled( self::MEMBERSHIP_REBUILD_CRON_HOOK ) ) {
 			wp_schedule_single_event( time() + 1, self::MEMBERSHIP_REBUILD_CRON_HOOK );
+		}
+
+		if ( $switched ) {
+			restore_current_blog();
 		}
 	}
 
@@ -2079,7 +2087,7 @@ class KD_Bonus_Rewards {
 			$state['phase']         = 'scan_orders';
 			$state['message']       = __( 'Scanning WooCommerce orders to rebuild lifetime spend.', 'kd-bonus' );
 			$state['site_index']    = 0;
-			$state['last_order_id'] = 0;
+			$state['order_page']    = 1;
 			$this->save_membership_rebuild_state( $state );
 			$this->schedule_membership_rebuild_batch();
 			return;
@@ -2090,8 +2098,8 @@ class KD_Bonus_Rewards {
 			delete_user_meta( $user_id, self::STATUS_META );
 		}
 
-		$state['user_reset_last_id']    = (int) end( $user_ids );
-		$state['user_reset_processed'] += count( $user_ids );
+		$state['user_reset_last_id']   = (int) end( $user_ids );
+		$state['user_reset_processed'] = (int) $state['user_reset_processed'] + count( $user_ids );
 		$this->save_membership_rebuild_state( $state );
 		$this->schedule_membership_rebuild_batch();
 	}
@@ -2116,54 +2124,66 @@ class KD_Bonus_Rewards {
 
 		$site_id = (int) $site_ids[ $site_index ];
 		$award_status = isset( $state['award_status'] ) ? sanitize_key( (string) $state['award_status'] ) : $this->get_award_order_status();
-		switch_to_blog( $site_id );
-		$order_rows = $this->get_order_rows_batch( (int) ( $state['last_order_id'] ?? 0 ), self::MEMBERSHIP_REBUILD_ORDER_BATCH, $award_status );
-		restore_current_blog();
+		$status_slug = $this->normalize_award_status_for_wc_query( $award_status );
+		$order_page  = max( 1, (int) ( $state['order_page'] ?? 1 ) );
+		$spend_deltas = array();
+		$orders       = array();
+		$max_pages    = 0;
 
-		if ( empty( $order_rows ) ) {
+		switch_to_blog( $site_id );
+		try {
+			$page_data = $this->get_orders_page_for_rebuild( $status_slug, $order_page, self::MEMBERSHIP_REBUILD_ORDER_BATCH );
+			$orders    = isset( $page_data['orders'] ) && is_array( $page_data['orders'] ) ? $page_data['orders'] : array();
+			$max_pages = isset( $page_data['max_pages'] ) ? (int) $page_data['max_pages'] : 0;
+
+			if ( ! empty( $orders ) ) {
+				foreach ( $orders as $order ) {
+					if ( ! $order instanceof WC_Order ) {
+						$order = wc_get_order( $order );
+					}
+					if ( ! $order instanceof WC_Order ) {
+						continue;
+					}
+
+					$user_id = (int) $order->get_user_id();
+					if ( $user_id <= 0 ) {
+						continue;
+					}
+
+					$eligible_subtotal = $this->get_order_eligible_subtotal( $order );
+					if ( $eligible_subtotal <= 0 ) {
+						continue;
+					}
+
+					if ( ! isset( $spend_deltas[ $user_id ] ) ) {
+						$spend_deltas[ $user_id ] = 0.0;
+					}
+					$spend_deltas[ $user_id ] += (float) $eligible_subtotal;
+				}
+			}
+		} finally {
+			restore_current_blog();
+		}
+
+		if ( empty( $orders ) ) {
 			$state['site_index']    = $site_index + 1;
-			$state['last_order_id'] = 0;
+			$state['order_page']    = 1;
 			$this->save_membership_rebuild_state( $state );
 			$this->schedule_membership_rebuild_batch();
 			return;
 		}
 
-		$spend_deltas = array();
-		$last_order_id = 0;
-
-		switch_to_blog( $site_id );
-		foreach ( $order_rows as $order_row ) {
-			$order_id = (int) $order_row['order_id'];
-			$user_id  = (int) $order_row['user_id'];
-			$last_order_id = max( $last_order_id, $order_id );
-
-			if ( $order_id <= 0 || $user_id <= 0 ) {
-				continue;
-			}
-
-			$order = wc_get_order( $order_id );
-			if ( ! $order instanceof WC_Order ) {
-				continue;
-			}
-
-			$eligible_subtotal = $this->get_order_eligible_subtotal( $order );
-			if ( $eligible_subtotal <= 0 ) {
-				continue;
-			}
-
-			if ( ! isset( $spend_deltas[ $user_id ] ) ) {
-				$spend_deltas[ $user_id ] = 0.0;
-			}
-			$spend_deltas[ $user_id ] += (float) $eligible_subtotal;
-		}
-		restore_current_blog();
-
 		foreach ( $spend_deltas as $user_id => $delta ) {
 			$this->adjust_lifetime_spend( (int) $user_id, (float) $delta );
 		}
 
-		$state['last_order_id']    = $last_order_id;
-		$state['processed_orders'] = (int) $state['processed_orders'] + count( $order_rows );
+		$state['processed_orders'] = (int) $state['processed_orders'] + count( $orders );
+		if ( $max_pages > 0 && $order_page < $max_pages ) {
+			$state['order_page'] = $order_page + 1;
+		} else {
+			$state['site_index'] = $site_index + 1;
+			$state['order_page'] = 1;
+		}
 		$this->save_membership_rebuild_state( $state );
 		$this->schedule_membership_rebuild_batch();
 	}
@@ -2252,38 +2272,51 @@ class KD_Bonus_Rewards {
 	}
 
 	/**
-	 * Get one batch of matching WooCommerce orders with customer IDs.
+	 * Normalize award status for WooCommerce order queries.
 	 *
-	 * @param int    $after_order_id Last processed order ID.
-	 * @param int    $limit Batch size.
-	 * @param string $award_status Trigger order status (with wc- prefix).
-	 * @return array<int,array<string,int>>
+	 * @param string $award_status Raw configured status.
+	 * @return string
 	 */
-	private function get_order_rows_batch( $after_order_id, $limit, $award_status ) {
-		global $wpdb;
+	private function normalize_award_status_for_wc_query( $award_status ) {
+		$award_status = sanitize_key( (string) $award_status );
 
-		$rows = $wpdb->get_results(
-			$wpdb->prepare(
-				"SELECT p.ID AS order_id, pm.meta_value AS user_id
-				FROM {$wpdb->posts} p
-				INNER JOIN {$wpdb->postmeta} pm
-					ON pm.post_id = p.ID
-					AND pm.meta_key = %s
-				WHERE p.post_type = %s
-					AND p.post_status = %s
-					AND p.ID > %d
-					AND CAST(pm.meta_value AS UNSIGNED) > 0
-				ORDER BY p.ID ASC
-				LIMIT %d",
-				'_customer_user',
-				'shop_order',
-				sanitize_key( $award_status ),
-				max( 0, (int) $after_order_id ),
-				max( 1, (int) $limit )
-			),
-			ARRAY_A
-		); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		return 0 === strpos( $award_status, 'wc-' ) ? substr( $award_status, 3 ) : $award_status;
+	}
 
-		return is_array( $rows ) ? $rows : array();
+	/**
+	 * Read one paged set of orders for rebuild processing.
+	 *
+	 * @param string $status_slug WooCommerce status slug without wc- prefix.
+	 * @param int    $page Page number.
+	 * @param int    $limit Batch size.
+	 * @return array<string,mixed>
+	 */
+	private function get_orders_page_for_rebuild( $status_slug, $page, $limit ) {
+		$query = wc_get_orders(
+			array(
+				'type'     => 'shop_order',
+				'status'   => array( $status_slug ),
+				'limit'    => max( 1, (int) $limit ),
+				'page'     => max( 1, (int) $page ),
+				'paginate' => true,
+				'orderby'  => 'date',
+				'order'    => 'ASC',
+				'return'   => 'objects',
+			)
+		);
+
+		if ( is_object( $query ) ) {
+			return array(
+				'orders'    => isset( $query->orders ) && is_array( $query->orders ) ? $query->orders : array(),
+				'max_pages' => isset( $query->max_num_pages ) ? (int) $query->max_num_pages : 0,
+				'total'     => isset( $query->total ) ? (int) $query->total : 0,
+			);
+		}
+
+		return array(
+			'orders'    => array(),
+			'max_pages' => 0,
+			'total'     => 0,
+		);
 	}
 }

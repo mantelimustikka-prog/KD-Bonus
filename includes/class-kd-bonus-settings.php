@@ -351,7 +351,7 @@ class KD_Bonus_Settings {
 					value="1"
 					class="button button-secondary"
 					<?php disabled( $is_rebuilding ); ?>
-					onclick="return window.confirm('<?php echo esc_js( __( 'This will reset all existing current membership and recalculate them from historical spend. This may take a long time.', 'kd-bonus' ) ); ?>');"
+					onclick="return window.confirm('<?php echo esc_js( __( 'This will reset all existing current memberships and recalculate them from historical spend. This may take a long time.', 'kd-bonus' ) ); ?>');"
 				><?php esc_html_e( 'Run Rebuild', 'kd-bonus' ); ?></button>
 				<p class="description"><?php esc_html_e( 'Scans stored WooCommerce orders, recalculates customer lifetime eligible spend, and rebuilds membership statuses in background batches.', 'kd-bonus' ); ?></p>
 				<?php if ( ! empty( $state_message ) ) : ?>
@@ -377,11 +377,7 @@ class KD_Bonus_Settings {
 					</p>
 				<?php endif; ?>
 				<?php if ( $is_rebuilding ) : ?>
-					<script>
-						setTimeout(function () {
-							window.location.reload();
-						}, 10000);
-					</script>
+					<p><a href="<?php echo esc_url( network_admin_url( 'admin.php?page=' . self::SETTINGS_SUBMENU_SLUG . '&tab=general' ) ); ?>" class="button button-link"><?php esc_html_e( 'Refresh progress', 'kd-bonus' ); ?></a></p>
 				<?php endif; ?>
 			</td>
 		</tr>
