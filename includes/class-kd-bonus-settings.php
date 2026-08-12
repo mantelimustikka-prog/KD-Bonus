@@ -237,6 +237,7 @@ class KD_Bonus_Settings {
 			case 'general':
 			default:
 				$rebuild_requested = ! empty( $_POST['kd_bonus_rebuild_memberships'] );
+				$reset_enabled     = ! empty( $_POST['kd_bonus_rebuild_reset_users'] ) ? 1 : 0;
 				$settings['dashboard_page_slug']        = sanitize_title( wp_unslash( $_POST['dashboard_page_slug'] ?? 'kd-bonus-dashboard' ) );
 				$settings['dashboard_page_slug']        = $settings['dashboard_page_slug'] ? $settings['dashboard_page_slug'] : 'kd-bonus-dashboard';
 				$settings['auto_create_dashboard_page'] = ! empty( $_POST['auto_create_dashboard_page'] ) ? 1 : 0;
@@ -244,7 +245,7 @@ class KD_Bonus_Settings {
 				$settings['award_order_status']         = $this->sanitize_award_order_status( wp_unslash( $_POST['award_order_status'] ?? '' ) );
 				$settings['reward_expiry_days']         = max( 0, absint( wp_unslash( $_POST['reward_expiry_days'] ?? 0 ) ) );
 				if ( $rebuild_requested ) {
-					do_action( 'kd_bonus_request_membership_rebuild', get_current_user_id() );
+					do_action( 'kd_bonus_request_membership_rebuild', get_current_user_id(), $reset_enabled );
 				}
 				break;
 		}
@@ -348,13 +349,19 @@ class KD_Bonus_Settings {
 		<tr>
 			<th scope="row"><?php esc_html_e( 'Update Memberships from existing spends', 'kd-bonus' ); ?></th>
 			<td>
+				<label>
+					<input name="kd_bonus_rebuild_reset_users" type="checkbox" value="1" checked />
+					<?php esc_html_e( 'Reset existing Bonus Status values before rebuild', 'kd-bonus' ); ?>
+				</label>
+				<p class="description"><?php esc_html_e( 'When checked, all stored Bonus Status values are cleared before recalculating. Uncheck to skip the reset phase and go directly to order scanning (safe when no status data exists).', 'kd-bonus' ); ?></p>
+				<br />
 				<button
 					type="submit"
 					name="kd_bonus_rebuild_memberships"
 					value="1"
 					class="button button-secondary"
 					<?php disabled( $is_rebuilding ); ?>
-					onclick="return window.confirm('<?php echo esc_js( __( 'This will reset all existing current memberships and recalculate them from historical spend. This may take a long time.', 'kd-bonus' ) ); ?>');"
+					onclick="return window.confirm('<?php echo esc_js( __( 'This will recalculate all membership statuses from historical spend. If the reset checkbox is checked, existing status values will be cleared first. This may take a long time.', 'kd-bonus' ) ); ?>');"
 				><?php esc_html_e( 'Run Rebuild', 'kd-bonus' ); ?></button>
 				<p class="description"><?php esc_html_e( 'Scans stored WooCommerce orders, recalculates customer lifetime eligible spend, and rebuilds membership statuses in background batches.', 'kd-bonus' ); ?></p>
 				<?php if ( ! empty( $state_message ) ) : ?>
@@ -366,10 +373,9 @@ class KD_Bonus_Settings {
 						echo esc_html(
 							sprintf(
 								/* translators: 1: rebuild phase, 2: reset users count, 3: total users, 4: processed orders, 5: total orders, 6: status rebuilt users, 7: total users. */
-								__( 'Phase: %1$s | Reset users: %2$d/%3$d | Orders scanned: %4$d/%5$d | Statuses rebuilt: %6$d/%7$d', 'kd-bonus' ),
+								__( 'Phase: %1$s | Reset users: %2$s | Orders scanned: %3$d/%4$d | Statuses rebuilt: %5$d/%6$d', 'kd-bonus' ),
 								$rebuild_phase,
-								$reset_users,
-								$total_users,
+								! empty( $rebuild_state['reset_skipped'] ) ? __( 'skipped', 'kd-bonus' ) : sprintf( '%d/%d', $reset_users, $total_users ),
 								$done_orders,
 								$total_orders,
 								$status_users,
@@ -401,10 +407,11 @@ class KD_Bonus_Settings {
 						const requestUrl = <?php echo wp_json_encode( $poll_url ); ?>;
 						const requestNonce = <?php echo wp_json_encode( $poll_nonce ); ?>;
 						const labels = <?php echo wp_json_encode( array(
-							'phase'   => __( 'Phase', 'kd-bonus' ),
-							'reset'   => __( 'Reset users', 'kd-bonus' ),
-							'orders'  => __( 'Orders scanned', 'kd-bonus' ),
-							'status'  => __( 'Statuses rebuilt', 'kd-bonus' ),
+							'phase'        => __( 'Phase', 'kd-bonus' ),
+							'reset'        => __( 'Reset users', 'kd-bonus' ),
+							'reset_skip'   => __( 'skipped', 'kd-bonus' ),
+							'orders'       => __( 'Orders scanned', 'kd-bonus' ),
+							'status'       => __( 'Statuses rebuilt', 'kd-bonus' ),
 						) ); ?>;
 						let active = <?php echo wp_json_encode( (bool) $is_rebuilding ); ?>;
 						let timer = null;
@@ -444,9 +451,12 @@ class KD_Bonus_Settings {
 										return;
 									}
 									const data = result.data;
+									const resetLabel = data.reset_skipped
+										? String(labels.reset || 'Reset users') + ': ' + String(labels.reset_skip || 'skipped')
+										: String(labels.reset || 'Reset users') + ': ' + String(data.users_reset || 0) + '/' + String(data.users_total || 0);
 									summary.textContent = [
 										String(labels.phase || 'Phase') + ': ' + String(data.phase || ''),
-										String(labels.reset || 'Reset users') + ': ' + String(data.users_reset || 0) + '/' + String(data.users_total || 0),
+										resetLabel,
 										String(labels.orders || 'Orders scanned') + ': ' + String(data.orders_processed || 0) + '/' + String(data.orders_total || 0),
 										String(labels.status || 'Statuses rebuilt') + ': ' + String(data.users_processed || 0) + '/' + String(data.users_total || 0)
 									].join(' | ');
