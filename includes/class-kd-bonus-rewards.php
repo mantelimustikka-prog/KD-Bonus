@@ -391,7 +391,7 @@ class KD_Bonus_Rewards {
 			'name'           => __( 'Member', 'kd-bonus' ),
 			'threshold'      => 0,
 			'reward_percent' => 0,
-			'priority'       => 0,
+			'priority'       => PHP_INT_MAX,
 		);
 
 		foreach ( $this->get_membership_statuses() as $status ) {
@@ -403,9 +403,9 @@ class KD_Bonus_Rewards {
 			}
 
 			$current_threshold = isset( $current['threshold'] ) ? (float) $current['threshold'] : 0.0;
-			$current_priority  = isset( $current['priority'] ) ? (int) $current['priority'] : 0;
+			$current_priority  = isset( $current['priority'] ) ? (int) $current['priority'] : PHP_INT_MAX;
 
-			if ( $threshold > $current_threshold || ( $threshold === $current_threshold && $priority > $current_priority ) ) {
+			if ( $threshold > $current_threshold || ( $threshold === $current_threshold && $priority < $current_priority ) ) {
 				$current = $status;
 			}
 		}
