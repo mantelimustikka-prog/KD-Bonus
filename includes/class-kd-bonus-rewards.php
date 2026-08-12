@@ -2207,7 +2207,7 @@ class KD_Bonus_Rewards {
 		wp_mail(
 			$to,
 			wp_strip_all_tags( $subject ),
-			(string) $body,
+			do_shortcode( (string) $body ),
 			array( 'Content-Type: text/html; charset=UTF-8' )
 		);
 	}

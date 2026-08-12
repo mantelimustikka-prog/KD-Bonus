@@ -94,6 +94,7 @@ class KD_Bonus_Plugin {
 	 */
 	public function load() {
 		$this->settings->register();
+		$this->settings->register_shortcodes();
 		$this->dashboard->register();
 		$this->rewards->register();
 	}
