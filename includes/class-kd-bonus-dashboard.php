@@ -97,8 +97,7 @@ class KD_Bonus_Dashboard {
 	 * Render the customer dashboard on the My Account endpoint.
 	 */
 	public function render_my_account_endpoint() {
-		// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- shortcode output is sanitized internally.
-		echo $this->render_shortcode();
+		echo wp_kses_post( $this->render_shortcode() );
 	}
 
 	/**
