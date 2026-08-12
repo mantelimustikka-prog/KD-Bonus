@@ -400,7 +400,14 @@ class KD_Bonus_Settings {
 						const summary = document.getElementById('kd-bonus-rebuild-summary');
 						const requestUrl = <?php echo wp_json_encode( $poll_url ); ?>;
 						const requestNonce = <?php echo wp_json_encode( $poll_nonce ); ?>;
+						const labels = <?php echo wp_json_encode( array(
+							'phase'   => __( 'Phase', 'kd-bonus' ),
+							'reset'   => __( 'Reset users', 'kd-bonus' ),
+							'orders'  => __( 'Orders scanned', 'kd-bonus' ),
+							'status'  => __( 'Statuses rebuilt', 'kd-bonus' ),
+						) ); ?>;
 						let active = <?php echo wp_json_encode( (bool) $is_rebuilding ); ?>;
+						let timer = null;
 						if (!panel || !summary || !requestUrl || !requestNonce || !window.fetch) {
 							return;
 						}
@@ -438,13 +445,17 @@ class KD_Bonus_Settings {
 									}
 									const data = result.data;
 									summary.textContent = [
-										'Phase: ' + String(data.phase || ''),
-										'Reset users: ' + String(data.users_reset || 0) + '/' + String(data.users_total || 0),
-										'Orders scanned: ' + String(data.orders_processed || 0) + '/' + String(data.orders_total || 0),
-										'Statuses rebuilt: ' + String(data.users_processed || 0) + '/' + String(data.users_total || 0)
+										String(labels.phase || 'Phase') + ': ' + String(data.phase || ''),
+										String(labels.reset || 'Reset users') + ': ' + String(data.users_reset || 0) + '/' + String(data.users_total || 0),
+										String(labels.orders || 'Orders scanned') + ': ' + String(data.orders_processed || 0) + '/' + String(data.orders_total || 0),
+										String(labels.status || 'Statuses rebuilt') + ': ' + String(data.users_processed || 0) + '/' + String(data.users_total || 0)
 									].join(' | ');
 									renderLogs(data.recent_logs || []);
 									active = !!data.running;
+									if (!active && timer) {
+										window.clearInterval(timer);
+										timer = null;
+									}
 									if (data.failed && data.message) {
 										panel.innerHTML = '';
 										const error = document.createElement('div');
@@ -454,12 +465,16 @@ class KD_Bonus_Settings {
 								})
 								.catch(function () {
 									active = false;
+									if (timer) {
+										window.clearInterval(timer);
+										timer = null;
+									}
 								});
 						};
 
 						if (active) {
 							poll();
-							window.setInterval(function () {
+							timer = window.setInterval(function () {
 								if (!active) {
 									return;
 								}

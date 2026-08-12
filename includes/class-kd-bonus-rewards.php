@@ -2541,9 +2541,10 @@ class KD_Bonus_Rewards {
 		foreach ( $user_ids as $user_id ) {
 			$lifetime_spend = $this->get_lifetime_spend( $user_id );
 			$status         = $this->get_status_for_spend( $lifetime_spend );
-			$status_name    = ! empty( $status['name'] ) ? sanitize_text_field( (string) $status['name'] ) : __( 'None', 'kd-bonus' );
+			$status_name    = __( 'None', 'kd-bonus' );
 
 			if ( $lifetime_spend > 0 && ! empty( $status['name'] ) ) {
+				$status_name = sanitize_text_field( (string) $status['name'] );
 				$this->upsert_user_meta_value( $user_id, self::STATUS_META, $status_name );
 			} else {
 				delete_user_meta( $user_id, self::STATUS_META );
@@ -2663,12 +2664,12 @@ class KD_Bonus_Rewards {
 		$recent_logs    = isset( $state['recent_logs'] ) && is_array( $state['recent_logs'] ) ? array_values( array_map( 'sanitize_text_field', $state['recent_logs'] ) ) : array();
 		$message        = isset( $state['message'] ) ? sanitize_text_field( (string) $state['message'] ) : '';
 		$is_running     = ! empty( $state['running'] );
-		$is_completed   = 'completed' === $status || 'completed' === $phase;
-		$is_failed      = 'failed' === $status || 'failed' === $phase;
+		$is_completed   = ! $is_running && ( 'completed' === $status || 'completed' === $phase );
+		$is_failed      = ! $is_running && ( 'failed' === $status || 'failed' === $phase );
 
 		wp_send_json_success(
 			array(
-				'status'           => $status ? $status : ( $is_running ? 'running' : '' ),
+				'status'           => $status ? $status : ( $is_running ? 'running' : 'idle' ),
 				'phase'            => $phase,
 				'message'          => $message,
 				'orders_processed' => $done_orders,
