@@ -690,7 +690,7 @@ class KD_Bonus_Rewards {
 		$can_manage       = $this->can_manage_user_bonus( $user->ID );
 		$computed_rate    = $this->format_decimal( (float) ( $computed_status['reward_percent'] ?? 0 ), 2 );
 		?>
-		<h2><?php esc_html_e( 'KD Rewads and Bonuses', 'kd-bonus' ); ?></h2>
+		<h2><?php esc_html_e( 'KD Rewards and Bonuses', 'kd-bonus' ); ?></h2>
 		<table class="form-table" role="presentation" style="background:#fff8c5;border:1px solid #dcdcde;border-radius:8px;padding:12px 16px;">
 			<tbody>
 				<tr>
@@ -781,6 +781,7 @@ class KD_Bonus_Rewards {
 						<td>
 							<?php wp_nonce_field( 'kd_bonus_profile_rewards_' . $user->ID, 'kd_bonus_profile_rewards_nonce' ); ?>
 							<select name="kd_bonus_adjustment_action" id="kd_bonus_adjustment_action">
+								<option value=""><?php esc_html_e( 'No adjustment', 'kd-bonus' ); ?></option>
 								<option value="add"><?php esc_html_e( 'Add rewards', 'kd-bonus' ); ?></option>
 								<option value="deduct"><?php esc_html_e( 'Deduct rewards', 'kd-bonus' ); ?></option>
 							</select>
@@ -1079,6 +1080,7 @@ class KD_Bonus_Rewards {
 				$status_before['name'],
 				$status_after['name'],
 				sprintf(
+					/* translators: 1: previous status, 2: new status, 3: order number. */
 					__( 'Membership status changed from %1$s to %2$s after order #%3$s.', 'kd-bonus' ),
 					$status_before['name'],
 					$status_after['name'],
@@ -1176,6 +1178,7 @@ class KD_Bonus_Rewards {
 				$status_before['name'] ?? '',
 				$status_after['name'] ?? '',
 				sprintf(
+					/* translators: 1: previous status, 2: new status, 3: order number. */
 					__( 'Membership status changed from %1$s to %2$s after order #%3$s was reversed.', 'kd-bonus' ),
 					$status_before['name'] ?: __( 'No status', 'kd-bonus' ),
 					$status_after['name'] ?: __( 'No status', 'kd-bonus' ),
@@ -1897,6 +1900,9 @@ class KD_Bonus_Rewards {
 		$raw = is_scalar( $raw ) ? (string) $raw : '0';
 		$raw = preg_replace( '/[^0-9,.\-]/', '', $raw );
 		$raw = str_replace( ',', '.', $raw );
+		if ( in_array( $raw, array( '', '-', '.', '-.' ), true ) || ! preg_match( '/^-?\d*(?:\.\d*)?$/', $raw ) ) {
+			return 0.0;
+		}
 
 		return (float) $raw;
 	}

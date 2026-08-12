@@ -164,6 +164,7 @@ class KD_Bonus_Settings {
 			'statuses' => __( 'Membership Statuses', 'kd-bonus' ),
 			'email'    => __( 'Email Settings', 'kd-bonus' ),
 			'points'   => __( 'Points & Reward Settings', 'kd-bonus' ),
+			'events'   => __( 'Reward Event Log', 'kd-bonus' ),
 		);
 
 		if ( ! isset( $tabs[ $tab ] ) ) {
@@ -182,16 +183,20 @@ class KD_Bonus_Settings {
 			<?php if ( isset( $_GET['updated'] ) ) : ?>
 				<div class="notice notice-success is-dismissible"><p><?php esc_html_e( 'KD Bonus settings updated.', 'kd-bonus' ); ?></p></div>
 			<?php endif; ?>
-			<form method="post" action="<?php echo esc_url( network_admin_url( 'edit.php?action=kd_bonus_save_settings' ) ); ?>">
-				<?php wp_nonce_field( 'kd_bonus_save_settings_' . $tab ); ?>
-				<input type="hidden" name="kd_bonus_tab" value="<?php echo esc_attr( $tab ); ?>" />
-				<table class="form-table" role="presentation">
-					<tbody>
-						<?php $this->render_fields( $tab, $settings ); ?>
-					</tbody>
-				</table>
-				<?php submit_button( __( 'Save Settings', 'kd-bonus' ) ); ?>
-			</form>
+			<?php if ( 'events' === $tab ) : ?>
+				<?php $this->render_event_log_tab(); ?>
+			<?php else : ?>
+				<form method="post" action="<?php echo esc_url( network_admin_url( 'edit.php?action=kd_bonus_save_settings' ) ); ?>">
+					<?php wp_nonce_field( 'kd_bonus_save_settings_' . $tab ); ?>
+					<input type="hidden" name="kd_bonus_tab" value="<?php echo esc_attr( $tab ); ?>" />
+					<table class="form-table" role="presentation">
+						<tbody>
+							<?php $this->render_fields( $tab, $settings ); ?>
+						</tbody>
+					</table>
+					<?php submit_button( __( 'Save Settings', 'kd-bonus' ) ); ?>
+				</form>
+			<?php endif; ?>
 		</div>
 		<?php
 	}
@@ -548,5 +553,70 @@ class KD_Bonus_Settings {
 		$statuses = $this->get_available_order_statuses();
 
 		return isset( $statuses[ $status ] ) ? $status : 'wc-processing';
+	}
+
+	/**
+	 * Render the read-only reward event log tab.
+	 */
+	private function render_event_log_tab() {
+		global $wpdb;
+
+		$table_name = KD_Bonus_Rewards::get_table_name();
+		$events     = $wpdb->get_results(
+			"SELECT id, user_id, site_id, order_id, type, amount, balance_after, currency, description, created_at
+			FROM {$table_name}
+			ORDER BY id DESC
+			LIMIT 200"
+		); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		?>
+		<p><?php echo esc_html( sprintf( __( 'The reward event log keeps the latest %d events (older rows are pruned automatically). Showing newest 200 rows.', 'kd-bonus' ), KD_Bonus_Rewards::EVENT_LOG_LIMIT ) ); ?></p>
+		<?php if ( empty( $events ) ) : ?>
+			<p><?php esc_html_e( 'No reward events recorded yet.', 'kd-bonus' ); ?></p>
+		<?php else : ?>
+			<div style="max-height:640px;overflow:auto;border:1px solid #ccd0d4;background:#fff;">
+				<table class="widefat striped">
+					<thead>
+						<tr>
+							<th><?php esc_html_e( 'ID', 'kd-bonus' ); ?></th>
+							<th><?php esc_html_e( 'Date', 'kd-bonus' ); ?></th>
+							<th><?php esc_html_e( 'User', 'kd-bonus' ); ?></th>
+							<th><?php esc_html_e( 'Site', 'kd-bonus' ); ?></th>
+							<th><?php esc_html_e( 'Order', 'kd-bonus' ); ?></th>
+							<th><?php esc_html_e( 'Type', 'kd-bonus' ); ?></th>
+							<th><?php esc_html_e( 'Amount', 'kd-bonus' ); ?></th>
+							<th><?php esc_html_e( 'Balance After', 'kd-bonus' ); ?></th>
+							<th><?php esc_html_e( 'Currency', 'kd-bonus' ); ?></th>
+							<th><?php esc_html_e( 'Details', 'kd-bonus' ); ?></th>
+						</tr>
+					</thead>
+					<tbody>
+						<?php foreach ( $events as $event ) : ?>
+							<?php $user = get_userdata( (int) $event->user_id ); ?>
+							<tr>
+								<td><?php echo esc_html( (string) $event->id ); ?></td>
+								<td><?php echo esc_html( wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), strtotime( $event->created_at . ' UTC' ) ) ); ?></td>
+								<td>
+									<?php
+									echo esc_html(
+										$user
+										? sprintf( '%1$s (#%2$d)', $user->user_login, (int) $event->user_id )
+										: sprintf( __( 'User #%d', 'kd-bonus' ), (int) $event->user_id )
+									);
+									?>
+								</td>
+								<td><?php echo esc_html( (string) $event->site_id ); ?></td>
+								<td><?php echo esc_html( (string) $event->order_id ); ?></td>
+								<td><?php echo esc_html( ucwords( str_replace( '_', ' ', $event->type ) ) ); ?></td>
+								<td><?php echo esc_html( number_format_i18n( (float) $event->amount, 2 ) ); ?></td>
+								<td><?php echo esc_html( number_format_i18n( (float) $event->balance_after, 2 ) ); ?></td>
+								<td><?php echo esc_html( $event->currency ); ?></td>
+								<td><?php echo esc_html( $event->description ); ?></td>
+							</tr>
+						<?php endforeach; ?>
+					</tbody>
+				</table>
+			</div>
+		<?php endif; ?>
+		<?php
 	}
 }
