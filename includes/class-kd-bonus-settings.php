@@ -40,6 +40,57 @@ class KD_Bonus_Settings {
 	}
 
 	/**
+	 * Register plugin shortcodes.
+	 *
+	 * Registers [kd_bonus_membership_statuses_table] which renders the current
+	 * Membership Statuses table. Admins can insert this shortcode into any email
+	 * body from the Email Settings screen and it will be expanded before sending.
+	 */
+	public function register_shortcodes() {
+		add_shortcode( 'kd_bonus_membership_statuses_table', array( $this, 'render_membership_statuses_table_shortcode' ) );
+	}
+
+	/**
+	 * Shortcode callback: render the Membership Statuses table from saved settings.
+	 *
+	 * @return string HTML table.
+	 */
+	public function render_membership_statuses_table_shortcode() {
+		$settings = self::get_settings();
+		$statuses = is_array( $settings['membership_statuses'] ) ? $settings['membership_statuses'] : array();
+
+		if ( empty( $statuses ) ) {
+			return '';
+		}
+
+		$rows = '';
+		foreach ( $statuses as $tier ) {
+			$name    = isset( $tier['name'] ) ? $tier['name'] : '';
+			$thresh  = isset( $tier['threshold'] ) ? $tier['threshold'] : 0;
+			$percent = isset( $tier['reward_percent'] ) ? $tier['reward_percent'] : 0;
+			$rows   .= '<tr>'
+				. '<td style="background-color:#fff9c4;">' . esc_html( (string) $name ) . '</td>'
+				. '<td style="background-color:#fff9c4;">' . esc_html( (string) $thresh ) . '</td>'
+				. '<td style="background-color:#fff9c4;">' . esc_html( (string) $percent ) . '%</td>'
+				. '</tr>';
+		}
+
+		return '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 auto;border-collapse:collapse;">'
+			. '<tr><td align="center" valign="middle">'
+			. '<table role="presentation" cellspacing="0" cellpadding="8" border="1" '
+			. 'style="border-collapse:collapse;width:100%;max-width:600px;background-color:#fff9c4;">'
+			. '<thead><tr>'
+			. '<th style="text-align:left;background-color:#fff9c4;">' . esc_html__( 'Status', 'kd-bonus' ) . '</th>'
+			. '<th style="text-align:left;background-color:#fff9c4;">' . esc_html__( 'Required products spent', 'kd-bonus' ) . '</th>'
+			. '<th style="text-align:left;background-color:#fff9c4;">' . esc_html__( 'Reward percentage', 'kd-bonus' ) . '</th>'
+			. '</tr></thead>'
+			. '<tbody>' . $rows . '</tbody>'
+			. '</table>'
+			. '</td></tr>'
+			. '</table>';
+	}
+
+	/**
 	 * Add menu and settings submenu in Network Admin.
 	 */
 	public function register_menu() {
@@ -158,11 +209,11 @@ class KD_Bonus_Settings {
 			'base_currency'              => '',
 			'email_notifications'        => 1,
 			'upgrade_email_subject'      => 'Your KD Bonus membership status was upgraded',
-			'upgrade_email_body'         => "<p>Hi {customer_name},</p>\n<p>Your membership status is now {status_name}. Keep shopping to earn even more Kamagra Dollar rewards.</p>\n" . self::get_membership_statuses_table_html(),
+			'upgrade_email_body'         => "<p>Hi {customer_name},</p>\n<p>Your membership status is now {status_name}. Keep shopping to earn even more Kamagra Dollar rewards.</p>\n[kd_bonus_membership_statuses_table]",
 			'reward_email_subject'       => 'You earned new Kamagra Dollar rewards',
-			'reward_email_body'          => "<p>Hi {customer_name},</p>\n<p>You earned {reward_amount} {reward_symbol} from order #{order_number}. Your new balance is {balance_amount}.</p>\n" . self::get_membership_statuses_table_html(),
+			'reward_email_body'          => "<p>Hi {customer_name},</p>\n<p>You earned {reward_amount} {reward_symbol} from order #{order_number}. Your new balance is {balance_amount}.</p>\n[kd_bonus_membership_statuses_table]",
 			'new_user_reward_email_subject' => 'Welcome! Your new account reward is ready',
-			'new_user_reward_email_body'    => "<p>Hi {customer_name},</p>\n<p>Welcome! You received {reward_amount} {reward_symbol} as a new account reward. Your balance is now {balance_amount}.</p>\n" . self::get_membership_statuses_table_html(),
+			'new_user_reward_email_body'    => "<p>Hi {customer_name},</p>\n<p>Welcome! You received {reward_amount} {reward_symbol} as a new account reward. Your balance is now {balance_amount}.</p>\n[kd_bonus_membership_statuses_table]",
 			'membership_statuses'        => self::default_membership_statuses(),
 		);
 	}
@@ -645,7 +696,7 @@ class KD_Bonus_Settings {
 					)
 				);
 				?>
-				<p class="description"><?php esc_html_e( 'Supported tokens: {customer_name}, {status_name}', 'kd-bonus' ); ?></p>
+				<p class="description"><?php esc_html_e( 'Supported tokens: {customer_name}, {status_name}', 'kd-bonus' ); ?> &mdash; <?php esc_html_e( 'Shortcode: [kd_bonus_membership_statuses_table]', 'kd-bonus' ); ?></p>
 			</td>
 		</tr>
 		<tr>
@@ -667,7 +718,7 @@ class KD_Bonus_Settings {
 					)
 				);
 				?>
-				<p class="description"><?php esc_html_e( 'Supported tokens: {customer_name}, {reward_amount}, {reward_symbol}, {order_number}, {balance_amount}', 'kd-bonus' ); ?></p>
+				<p class="description"><?php esc_html_e( 'Supported tokens: {customer_name}, {reward_amount}, {reward_symbol}, {order_number}, {balance_amount}', 'kd-bonus' ); ?> &mdash; <?php esc_html_e( 'Shortcode: [kd_bonus_membership_statuses_table]', 'kd-bonus' ); ?></p>
 			</td>
 		</tr>
 		<tr>
@@ -689,7 +740,7 @@ class KD_Bonus_Settings {
 					)
 				);
 				?>
-				<p class="description"><?php esc_html_e( 'Supported tokens: {customer_name}, {reward_amount}, {reward_symbol}, {balance_amount}', 'kd-bonus' ); ?></p>
+				<p class="description"><?php esc_html_e( 'Supported tokens: {customer_name}, {reward_amount}, {reward_symbol}, {balance_amount}', 'kd-bonus' ); ?> &mdash; <?php esc_html_e( 'Shortcode: [kd_bonus_membership_statuses_table]', 'kd-bonus' ); ?></p>
 			</td>
 		</tr>
 		<?php
