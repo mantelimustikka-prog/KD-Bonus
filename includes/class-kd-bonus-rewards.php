@@ -1073,7 +1073,8 @@ class KD_Bonus_Rewards {
 				<p>
 					<button class="button" type="submit" name="kd_bonus_checkout_action" value="apply"><?php esc_html_e( 'Apply Balance', 'kd-bonus' ); ?></button>
 					<?php if ( $applied_base > 0 ) : ?>
-						<button class="button button-secondary" type="submit" name="kd_bonus_checkout_action" value="remove"><?php esc_html_e( 'Remove Balance', 'kd-bonus' ); ?></button>
+						/* translators: $KD is the name of the KD Bonus currency/reward. */
+					<button class="button button-secondary" type="submit" name="kd_bonus_checkout_action" value="remove"><?php esc_html_e( 'Remove $KD', 'kd-bonus' ); ?></button>
 					<?php endif; ?>
 				</p>
 			</form>
