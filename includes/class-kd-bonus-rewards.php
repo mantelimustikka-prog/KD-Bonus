@@ -1382,6 +1382,7 @@ class KD_Bonus_Rewards {
 
 		if ( 'remove' === $action ) {
 			WC()->session->__unset( self::SESSION_REDEMPTION_KEY );
+			WC()->cart->calculate_totals();
 			wc_add_notice( __( 'KD Bonus credit removed from checkout.', 'kd-bonus' ), 'notice' );
 			wp_safe_redirect( wc_get_checkout_url() );
 			exit;
@@ -1452,7 +1453,7 @@ class KD_Bonus_Rewards {
 				<p>
 					<button class="button" type="submit" name="kd_bonus_checkout_action" value="apply"><?php esc_html_e( 'Apply Balance', 'kd-bonus' ); ?></button>
 					<?php if ( $applied_base > 0 ) : ?>
-						<button class="button button-secondary" type="submit" name="kd_bonus_checkout_action" value="remove"><?php esc_html_e( 'Remove Balance', 'kd-bonus' ); ?></button>
+						<button class="button button-secondary" type="submit" name="kd_bonus_checkout_action" value="remove"><?php esc_html_e( 'Remove $KD', 'kd-bonus' ); ?></button>
 					<?php endif; ?>
 				</p>
 			</form>
