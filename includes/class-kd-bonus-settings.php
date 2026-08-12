@@ -120,6 +120,8 @@ class KD_Bonus_Settings {
 			'checkout_redemption'        => 1,
 			'award_order_status'         => 'wc-processing',
 			'reward_expiry_days'         => 0,
+			'reward_new_user'            => 0,
+			'new_user_reward_amount'     => 0,
 			'reward_name'                => 'Kamagra Dollar',
 			'reward_symbol'              => '$KD',
 			'base_currency'              => '',
@@ -128,6 +130,8 @@ class KD_Bonus_Settings {
 			'upgrade_email_body'         => "Hi {customer_name},\n\nYour membership status is now {status_name}. Keep shopping to earn even more Kamagra Dollar rewards.\n",
 			'reward_email_subject'       => 'You earned new Kamagra Dollar rewards',
 			'reward_email_body'          => "Hi {customer_name},\n\nYou earned {reward_amount} {reward_symbol} from order #{order_number}. Your new balance is {balance_amount}.\n",
+			'new_user_reward_email_subject' => 'Welcome! Your new account reward is ready',
+			'new_user_reward_email_body'    => "Hi {customer_name},\n\nWelcome! You received {reward_amount} {reward_symbol} as a new account reward. Your balance is now {balance_amount}.\n",
 			'membership_statuses'        => array(
 				array(
 					'priority'       => 10,
@@ -240,9 +244,11 @@ class KD_Bonus_Settings {
 			case 'email':
 				$settings['email_notifications']   = ! empty( $_POST['email_notifications'] ) ? 1 : 0;
 				$settings['upgrade_email_subject'] = sanitize_text_field( wp_unslash( $_POST['upgrade_email_subject'] ?? '' ) );
-				$settings['upgrade_email_body']    = sanitize_textarea_field( wp_unslash( $_POST['upgrade_email_body'] ?? '' ) );
+				$settings['upgrade_email_body']    = wp_kses_post( wp_unslash( $_POST['upgrade_email_body'] ?? '' ) );
 				$settings['reward_email_subject']  = sanitize_text_field( wp_unslash( $_POST['reward_email_subject'] ?? '' ) );
-				$settings['reward_email_body']     = sanitize_textarea_field( wp_unslash( $_POST['reward_email_body'] ?? '' ) );
+				$settings['reward_email_body']     = wp_kses_post( wp_unslash( $_POST['reward_email_body'] ?? '' ) );
+				$settings['new_user_reward_email_subject'] = sanitize_text_field( wp_unslash( $_POST['new_user_reward_email_subject'] ?? '' ) );
+				$settings['new_user_reward_email_body']    = wp_kses_post( wp_unslash( $_POST['new_user_reward_email_body'] ?? '' ) );
 				break;
 			case 'points':
 				$settings['reward_name']   = sanitize_text_field( wp_unslash( $_POST['reward_name'] ?? '' ) );
@@ -259,6 +265,8 @@ class KD_Bonus_Settings {
 				$settings['checkout_redemption']        = ! empty( $_POST['checkout_redemption'] ) ? 1 : 0;
 				$settings['award_order_status']         = $this->sanitize_award_order_status( wp_unslash( $_POST['award_order_status'] ?? '' ) );
 				$settings['reward_expiry_days']         = max( 0, absint( wp_unslash( $_POST['reward_expiry_days'] ?? 0 ) ) );
+				$settings['reward_new_user']            = ! empty( $_POST['reward_new_user'] ) ? 1 : 0;
+				$settings['new_user_reward_amount']     = max( 0, (float) wp_unslash( $_POST['new_user_reward_amount'] ?? 0 ) );
 				if ( $rebuild_requested ) {
 					do_action( 'kd_bonus_request_membership_rebuild', get_current_user_id(), $reset_enabled );
 				}
@@ -422,6 +430,18 @@ class KD_Bonus_Settings {
 			<td>
 				<input name="reward_expiry_days" id="reward_expiry_days" type="number" class="small-text" min="0" step="1" value="<?php echo esc_attr( (int) $settings['reward_expiry_days'] ); ?>" />
 				<p class="description"><?php esc_html_e( 'Set to 0 to disable expiry. Any unused KD Bonus balance expires this many days after the customer last received reward points.', 'kd-bonus' ); ?></p>
+			</td>
+		</tr>
+		<tr>
+			<th scope="row"><?php esc_html_e( 'Reward new user', 'kd-bonus' ); ?></th>
+			<td>
+				<label><input name="reward_new_user" type="checkbox" value="1" <?php checked( ! empty( $settings['reward_new_user'] ) ); ?> /> <?php esc_html_e( 'Automatically grant a reward when a new user account is created.', 'kd-bonus' ); ?></label>
+			</td>
+		</tr>
+		<tr>
+			<th scope="row"><label for="new_user_reward_amount"><?php esc_html_e( 'New User Reward Amount', 'kd-bonus' ); ?></label></th>
+			<td>
+				<input name="new_user_reward_amount" id="new_user_reward_amount" type="number" class="small-text" min="0" step="0.01" value="<?php echo esc_attr( (float) $settings['new_user_reward_amount'] ); ?>" />
 			</td>
 		</tr>
 		<tr>
@@ -601,7 +621,18 @@ class KD_Bonus_Settings {
 		<tr>
 			<th scope="row"><label for="upgrade_email_body"><?php esc_html_e( 'Upgrade Email Body', 'kd-bonus' ); ?></label></th>
 			<td>
-				<textarea name="upgrade_email_body" id="upgrade_email_body" class="large-text code" rows="6"><?php echo esc_textarea( $settings['upgrade_email_body'] ); ?></textarea>
+				<?php
+				wp_editor(
+					$settings['upgrade_email_body'],
+					'kd_bonus_upgrade_email_body',
+					array(
+						'textarea_name' => 'upgrade_email_body',
+						'textarea_rows' => 8,
+						'media_buttons' => false,
+						'teeny'         => true,
+					)
+				);
+				?>
 				<p class="description"><?php esc_html_e( 'Supported tokens: {customer_name}, {status_name}', 'kd-bonus' ); ?></p>
 			</td>
 		</tr>
@@ -612,8 +643,41 @@ class KD_Bonus_Settings {
 		<tr>
 			<th scope="row"><label for="reward_email_body"><?php esc_html_e( 'Reward Email Body', 'kd-bonus' ); ?></label></th>
 			<td>
-				<textarea name="reward_email_body" id="reward_email_body" class="large-text code" rows="6"><?php echo esc_textarea( $settings['reward_email_body'] ); ?></textarea>
+				<?php
+				wp_editor(
+					$settings['reward_email_body'],
+					'kd_bonus_reward_email_body',
+					array(
+						'textarea_name' => 'reward_email_body',
+						'textarea_rows' => 8,
+						'media_buttons' => false,
+						'teeny'         => true,
+					)
+				);
+				?>
 				<p class="description"><?php esc_html_e( 'Supported tokens: {customer_name}, {reward_amount}, {reward_symbol}, {order_number}, {balance_amount}', 'kd-bonus' ); ?></p>
+			</td>
+		</tr>
+		<tr>
+			<th scope="row"><label for="new_user_reward_email_subject"><?php esc_html_e( 'New Account Reward Email Subject', 'kd-bonus' ); ?></label></th>
+			<td><input name="new_user_reward_email_subject" id="new_user_reward_email_subject" type="text" class="large-text" value="<?php echo esc_attr( $settings['new_user_reward_email_subject'] ); ?>" /></td>
+		</tr>
+		<tr>
+			<th scope="row"><label for="new_user_reward_email_body"><?php esc_html_e( 'New Account Reward Email Body', 'kd-bonus' ); ?></label></th>
+			<td>
+				<?php
+				wp_editor(
+					$settings['new_user_reward_email_body'],
+					'kd_bonus_new_user_reward_email_body',
+					array(
+						'textarea_name' => 'new_user_reward_email_body',
+						'textarea_rows' => 8,
+						'media_buttons' => false,
+						'teeny'         => true,
+					)
+				);
+				?>
+				<p class="description"><?php esc_html_e( 'Supported tokens: {customer_name}, {reward_amount}, {reward_symbol}, {balance_amount}', 'kd-bonus' ); ?></p>
 			</td>
 		</tr>
 		<?php
