@@ -405,7 +405,7 @@ class KD_Bonus_Rewards {
 			$current_threshold = isset( $current['threshold'] ) ? (float) $current['threshold'] : 0.0;
 			$current_priority  = isset( $current['priority'] ) ? (int) $current['priority'] : 0;
 
-			if ( $threshold > $current_threshold || ( $threshold === $current_threshold && $priority > $current_priority ) ) {
+			if ( $threshold > $current_threshold || ( $threshold === $current_threshold && $priority < $current_priority ) ) {
 				$current = $status;
 			}
 		}
