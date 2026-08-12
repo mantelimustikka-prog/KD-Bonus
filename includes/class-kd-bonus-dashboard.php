@@ -45,6 +45,7 @@ class KD_Bonus_Dashboard {
 	 */
 	public function register() {
 		add_shortcode( 'kd_bonus_dashboard', array( $this, 'render_shortcode' ) );
+		add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_styles' ) );
 
 		if ( ! class_exists( 'WooCommerce' ) ) {
 			return;
@@ -53,6 +54,44 @@ class KD_Bonus_Dashboard {
 		add_action( 'init', array( $this, 'register_my_account_endpoint' ) );
 		add_filter( 'woocommerce_account_menu_items', array( $this, 'add_my_account_menu_item' ) );
 		add_action( 'woocommerce_account_' . self::MY_ACCOUNT_ENDPOINT . '_endpoint', array( $this, 'render_my_account_endpoint' ) );
+	}
+
+	/**
+	 * Enqueue frontend styles for the dashboard.
+	 */
+	public function enqueue_styles() {
+		wp_register_style( 'kd-bonus-dashboard', false, array(), false, false );
+		wp_enqueue_style( 'kd-bonus-dashboard' );
+		wp_add_inline_style( 'kd-bonus-dashboard', $this->get_tier_progress_css() );
+	}
+
+	/**
+	 * Return the CSS for the membership tier progress bar.
+	 *
+	 * @return string
+	 */
+	private function get_tier_progress_css() {
+		return '
+			.kd-bonus-tier-progress__bar{display:flex;align-items:flex-start;position:relative;padding:12px 0 32px;}
+			.kd-bonus-tier-progress__bar::before{content:\'\';position:absolute;top:16px;left:0;right:0;height:4px;background:#dcdcde;z-index:0;}
+			.kd-bonus-tier-progress__step{flex:1;display:flex;flex-direction:column;align-items:center;position:relative;z-index:1;}
+			.kd-bonus-tier-progress__dot{width:32px;height:32px;border-radius:50%;border:3px solid #dcdcde;background:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;transition:background .2s,border-color .2s;}
+			.kd-bonus-tier-progress__step--completed .kd-bonus-tier-progress__dot{background:#4caf50;border-color:#4caf50;color:#fff;}
+			.kd-bonus-tier-progress__step--current .kd-bonus-tier-progress__dot{background:#f5a623;border-color:#f5a623;color:#fff;box-shadow:0 0 0 4px rgba(245,166,35,.25);}
+			.kd-bonus-tier-progress__step--future .kd-bonus-tier-progress__dot{background:#fff;border-color:#dcdcde;color:#aaa;}
+			.kd-bonus-tier-progress__label{margin-top:8px;font-size:11px;text-align:center;word-break:break-word;max-width:80px;line-height:1.3;}
+			.kd-bonus-tier-progress__step--current .kd-bonus-tier-progress__label{font-weight:700;color:#f5a623;}
+			.kd-bonus-tier-progress__step--completed .kd-bonus-tier-progress__label{color:#4caf50;}
+			.kd-bonus-tier-progress__step--future .kd-bonus-tier-progress__label{color:#aaa;}
+			.kd-bonus-tier-progress__connector{position:absolute;top:16px;left:50%;right:-50%;height:4px;z-index:0;}
+			.kd-bonus-tier-progress__step--completed .kd-bonus-tier-progress__connector{background:#4caf50;}
+			.kd-bonus-tier-progress__step--current .kd-bonus-tier-progress__connector{background:#dcdcde;}
+			.kd-bonus-tier-progress__step--future .kd-bonus-tier-progress__connector{background:#dcdcde;}
+			@media(max-width:480px){
+				.kd-bonus-tier-progress__label{font-size:9px;max-width:56px;}
+				.kd-bonus-tier-progress__dot{width:24px;height:24px;font-size:10px;}
+			}
+		';
 	}
 
 	/**
@@ -97,7 +136,9 @@ class KD_Bonus_Dashboard {
 	 * Render the customer dashboard on the My Account endpoint.
 	 */
 	public function render_my_account_endpoint() {
-		echo wp_kses_post( $this->render_shortcode() );
+		// render_shortcode() escapes all dynamic values internally; wrapping with
+		// wp_kses_post() here would strip the inline <style> block and corrupt output.
+		echo $this->render_shortcode(); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 	}
 
 	/**
@@ -128,6 +169,9 @@ class KD_Bonus_Dashboard {
 		$reward_symbol     = $settings['reward_symbol'] ?: '$KD';
 
 		// Prepare sorted membership tier list for the progress bar.
+		// Sort ascending by threshold; break ties with DESCENDING priority so that
+		// a numerically lower priority number (= higher rank) appears further right,
+		// matching how get_status_for_spend() resolves the active tier.
 		$all_statuses = $this->rewards->get_membership_statuses();
 		usort(
 			$all_statuses,
@@ -136,7 +180,8 @@ class KD_Bonus_Dashboard {
 				if ( 0 !== $threshold_compare ) {
 					return $threshold_compare;
 				}
-				return (int) ( $a['priority'] ?? 0 ) <=> (int) ( $b['priority'] ?? 0 );
+				// Lower priority number = higher rank → sort descending so highest rank is rightmost.
+				return (int) ( $b['priority'] ?? 0 ) <=> (int) ( $a['priority'] ?? 0 );
 			}
 		);
 		$current_status_name = isset( $status['name'] ) ? (string) $status['name'] : '';
@@ -148,41 +193,28 @@ class KD_Bonus_Dashboard {
 
 			<?php if ( ! empty( $all_statuses ) ) : ?>
 			<div class="kd-bonus-tier-progress" style="margin-bottom:24px;">
-				<style>
-					.kd-bonus-tier-progress__bar{display:flex;align-items:flex-start;position:relative;padding:12px 0 32px;}
-					.kd-bonus-tier-progress__bar::before{content:'';position:absolute;top:16px;left:0;right:0;height:4px;background:#dcdcde;z-index:0;}
-					.kd-bonus-tier-progress__step{flex:1;display:flex;flex-direction:column;align-items:center;position:relative;z-index:1;}
-					.kd-bonus-tier-progress__dot{width:32px;height:32px;border-radius:50%;border:3px solid #dcdcde;background:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;transition:background .2s,border-color .2s;}
-					.kd-bonus-tier-progress__step--completed .kd-bonus-tier-progress__dot{background:#4caf50;border-color:#4caf50;color:#fff;}
-					.kd-bonus-tier-progress__step--current .kd-bonus-tier-progress__dot{background:#f5a623;border-color:#f5a623;color:#fff;box-shadow:0 0 0 4px rgba(245,166,35,.25);}
-					.kd-bonus-tier-progress__step--future .kd-bonus-tier-progress__dot{background:#fff;border-color:#dcdcde;color:#aaa;}
-					.kd-bonus-tier-progress__label{margin-top:8px;font-size:11px;text-align:center;word-break:break-word;max-width:80px;line-height:1.3;}
-					.kd-bonus-tier-progress__step--current .kd-bonus-tier-progress__label{font-weight:700;color:#f5a623;}
-					.kd-bonus-tier-progress__step--completed .kd-bonus-tier-progress__label{color:#4caf50;}
-					.kd-bonus-tier-progress__step--future .kd-bonus-tier-progress__label{color:#aaa;}
-					.kd-bonus-tier-progress__connector{position:absolute;top:16px;left:50%;right:-50%;height:4px;z-index:0;}
-					.kd-bonus-tier-progress__step--completed .kd-bonus-tier-progress__connector{background:#4caf50;}
-					.kd-bonus-tier-progress__step--current .kd-bonus-tier-progress__connector{background:#dcdcde;}
-					.kd-bonus-tier-progress__step--future .kd-bonus-tier-progress__connector{background:#dcdcde;}
-					@media(max-width:480px){
-						.kd-bonus-tier-progress__label{font-size:9px;max-width:56px;}
-						.kd-bonus-tier-progress__dot{width:24px;height:24px;font-size:10px;}
-					}
-				</style>
 				<div class="kd-bonus-tier-progress__bar">
 					<?php
-					$total_steps = count( $all_statuses );
+					$total_steps   = count( $all_statuses );
 					$found_current = false;
-					foreach ( $all_statuses as $step_index => $tier ) :
-						$tier_name = isset( $tier['name'] ) ? (string) $tier['name'] : '';
-						$is_current = ( 0 === strcasecmp( $tier_name, $current_status_name ) );
-						if ( $is_current ) {
-							$found_current = true;
+					// Pre-scan to check whether any tier matches the current status name.
+					// If none matches (e.g. synthetic fallback "Member" not stored as a tier),
+					// all steps should render as future rather than all-completed.
+					$any_match = false;
+					foreach ( $all_statuses as $tier ) {
+						if ( 0 === strcasecmp( isset( $tier['name'] ) ? (string) $tier['name'] : '', $current_status_name ) ) {
+							$any_match = true;
+							break;
 						}
+					}
+					foreach ( $all_statuses as $step_index => $tier ) :
+						$tier_name  = isset( $tier['name'] ) ? (string) $tier['name'] : '';
+						$is_current = $any_match && ( 0 === strcasecmp( $tier_name, $current_status_name ) );
 						if ( $is_current ) {
-							$step_class = 'kd-bonus-tier-progress__step--current';
+							$step_class    = 'kd-bonus-tier-progress__step--current';
+							$found_current = true;
 						} elseif ( ! $found_current ) {
-							$step_class = 'kd-bonus-tier-progress__step--completed';
+							$step_class = $any_match ? 'kd-bonus-tier-progress__step--completed' : 'kd-bonus-tier-progress__step--future';
 						} else {
 							$step_class = 'kd-bonus-tier-progress__step--future';
 						}
