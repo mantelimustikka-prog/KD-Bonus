@@ -108,7 +108,7 @@ class KD_Bonus_Rewards {
 		add_action( 'admin_notices', array( $this, 'render_copy_status_from_bfw_notice' ) );
 		add_action( 'network_admin_notices', array( $this, 'render_copy_status_from_bfw_notice' ) );
 		add_action( 'network_admin_menu', array( $this, 'register_event_log_submenu' ) );
-		add_action( 'kd_bonus_request_membership_rebuild', array( $this, 'start_membership_rebuild' ), 10, 1 );
+		add_action( 'kd_bonus_request_membership_rebuild', array( $this, 'start_membership_rebuild' ), 10, 2 );
 		add_action( self::MEMBERSHIP_REBUILD_CRON_HOOK, array( $this, 'process_membership_rebuild_batch' ) );
 		add_action( 'wp_ajax_kd_bonus_membership_rebuild_progress', array( $this, 'ajax_membership_rebuild_progress' ) );
 
@@ -140,8 +140,9 @@ class KD_Bonus_Rewards {
 	 * Start or resume membership rebuild from historical order spend.
 	 *
 	 * @param int $initiator_user_id Administrator user ID.
+	 * @param int $reset_enabled     1 to reset existing Bonus Status values before rebuild, 0 to skip.
 	 */
-	public function start_membership_rebuild( $initiator_user_id = 0 ) {
+	public function start_membership_rebuild( $initiator_user_id = 0, $reset_enabled = 1 ) {
 		$state = self::get_membership_rebuild_state();
 		if ( ! empty( $state['running'] ) ) {
 			return;
@@ -171,11 +172,28 @@ class KD_Bonus_Rewards {
 			restore_current_blog();
 		}
 
+		$reset_enabled      = (int) $reset_enabled;
+		$has_stored_status  = $this->users_have_stored_bonus_status();
+		$do_reset           = $reset_enabled && $has_stored_status;
+
+		if ( $do_reset ) {
+			$initial_phase   = 'reset_users';
+			$initial_message = __( 'Resetting existing membership state before historical spend rebuild.', 'kd-bonus' );
+		} elseif ( $reset_enabled && ! $has_stored_status ) {
+			$initial_phase   = 'scan_orders';
+			$initial_message = __( 'Reset skipped automatically: no existing Bonus Status data found. Scanning WooCommerce orders to rebuild lifetime spend.', 'kd-bonus' );
+		} else {
+			$initial_phase   = 'scan_orders';
+			$initial_message = __( 'Reset phase skipped. Scanning WooCommerce orders to rebuild lifetime spend.', 'kd-bonus' );
+		}
+
 		$state = array(
 			'running'                  => 1,
 			'status'                   => 'running',
-			'phase'                    => 'reset_users',
-			'message'                  => __( 'Resetting existing membership state before historical spend rebuild.', 'kd-bonus' ),
+			'phase'                    => $initial_phase,
+			'message'                  => $initial_message,
+			'reset_enabled'            => $do_reset ? 1 : 0,
+			'reset_skipped'            => $do_reset ? 0 : 1,
 			'initiator_user_id'        => absint( $initiator_user_id ),
 			'started_at'               => time(),
 			'updated_at'               => time(),
@@ -2600,6 +2618,25 @@ class KD_Bonus_Rewards {
 	}
 
 	/**
+	 * Check whether any user currently has a stored Bonus Status or override value.
+	 *
+	 * @return bool
+	 */
+	private function users_have_stored_bonus_status() {
+		global $wpdb;
+
+		$row = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT user_id FROM {$wpdb->usermeta} WHERE meta_key IN (%s, %s) AND meta_value != '' LIMIT 1",
+				self::STATUS_META,
+				self::STATUS_OVERRIDE_META
+			)
+		);
+
+		return ! empty( $row );
+	}
+
+	/**
 	 * Return all WooCommerce order statuses included in membership rebuild scans.
 	 *
 	 * @return array<int,string>
@@ -2661,6 +2698,7 @@ class KD_Bonus_Rewards {
 		$total_users    = isset( $state['total_users'] ) ? (int) $state['total_users'] : 0;
 		$done_users     = isset( $state['status_rebuild_processed'] ) ? (int) $state['status_rebuild_processed'] : 0;
 		$reset_users    = isset( $state['user_reset_processed'] ) ? (int) $state['user_reset_processed'] : 0;
+		$reset_skipped  = ! empty( $state['reset_skipped'] );
 		$recent_logs    = isset( $state['recent_logs'] ) && is_array( $state['recent_logs'] ) ? array_values( array_map( 'sanitize_text_field', $state['recent_logs'] ) ) : array();
 		$message        = isset( $state['message'] ) ? sanitize_text_field( (string) $state['message'] ) : '';
 		$is_running     = ! empty( $state['running'] );
@@ -2677,6 +2715,7 @@ class KD_Bonus_Rewards {
 				'users_processed'  => $done_users,
 				'users_total'      => $total_users,
 				'users_reset'      => $reset_users,
+				'reset_skipped'    => $reset_skipped,
 				'recent_logs'      => $recent_logs,
 				'running'          => $is_running,
 				'completed'        => $is_completed,
