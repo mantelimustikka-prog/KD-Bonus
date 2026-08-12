@@ -749,7 +749,7 @@ class KD_Bonus_Settings {
 			LIMIT 200"
 		); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
 		?>
-		<p><?php echo esc_html( sprintf( __( 'The reward event log keeps the latest %d events (older rows are pruned automatically). Showing newest 200 rows.', 'kd-bonus' ), KD_Bonus_Rewards::EVENT_LOG_LIMIT ) ); ?></p>
+		<p><?php echo esc_html( sprintf( __( 'The reward event log keeps the latest %d events (older rows are pruned automatically). Showing newest 200 rows.', 'kd-bonus' ), KD_Bonus_Rewards::MAX_EVENT_LOG_ROWS ) ); ?></p>
 		<?php if ( empty( $events ) ) : ?>
 			<p><?php esc_html_e( 'No reward events recorded yet.', 'kd-bonus' ); ?></p>
 		<?php else : ?>
