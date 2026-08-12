@@ -62,7 +62,7 @@ class KD_Bonus_Dashboard {
 		$available_balance = $this->rewards->get_available_balance( $user_id );
 		$lifetime_spend    = $this->rewards->get_lifetime_spend( $user_id );
 		$status            = $this->rewards->get_user_status( $user_id );
-		$history           = $this->rewards->get_transaction_history( $user_id, 10 );
+		$history           = $this->rewards->get_transaction_history( $user_id, 25 );
 		$current_currency  = get_woocommerce_currency();
 		$discount_value    = $this->rewards->convert_from_base( $available_balance, $current_currency, array( 'context' => 'dashboard' ) );
 		$reward_name       = $settings['reward_name'] ?: __( 'Reward Balance', 'kd-bonus' );
@@ -99,7 +99,8 @@ class KD_Bonus_Dashboard {
 				</div>
 			</div>
 
-			<h3 style="margin-top:24px;"><?php esc_html_e( 'Reward History', 'kd-bonus' ); ?></h3>
+			<h3 style="margin-top:24px;"><?php esc_html_e( 'Reward Event Log', 'kd-bonus' ); ?></h3>
+			<p><?php esc_html_e( 'Showing your latest reward events from the global 5000-event log.', 'kd-bonus' ); ?></p>
 			<?php if ( empty( $history ) ) : ?>
 				<p><?php esc_html_e( 'No reward activity yet.', 'kd-bonus' ); ?></p>
 			<?php else : ?>

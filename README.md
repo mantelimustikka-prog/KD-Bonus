@@ -18,6 +18,8 @@ Network-activated WordPress multisite starter plugin for a global WooCommerce re
 - Membership progression based on **lifetime eligible spend**
 - Checkout balance display plus **partial or full** $KD redemption
 - Global transaction ledger table for reward history
+- Admin user profile section **KD Rewads and Bonuses** with manual add/deduct controls, required remarks, status dropdown, and extended reward metadata visibility
+- Reward event log retention capped to the latest **5000** records with admin log view and customer dashboard visibility
 - Currency conversion filter hook for multi-currency integrations:
   - `kd_bonus_currency_conversion_rate`
 - Eligible subtotal customization hook:
