@@ -203,6 +203,9 @@ class KD_Bonus_Dashboard {
 					</tbody>
 				</table>
 			<?php endif; ?>
+
+			<h3 style="margin-top:24px;"><?php esc_html_e( 'Membership Statuses', 'kd-bonus' ); ?></h3>
+			<?php echo wp_kses_post( $this->settings->render_membership_statuses_table_shortcode() ); ?>
 		</div>
 		<?php
 
