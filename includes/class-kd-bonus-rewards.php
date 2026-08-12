@@ -66,6 +66,16 @@ class KD_Bonus_Rewards {
 	const MAX_EVENT_LOG_ROWS = 5000;
 
 	/**
+	 * Network admin submenu slug for the users with rewards page.
+	 */
+	const USERS_WITH_REWARDS_SUBMENU_SLUG = 'kd-bonus-users-with-rewards';
+
+	/**
+	 * Users shown per page on the network rewards users list.
+	 */
+	const USERS_WITH_REWARDS_PER_PAGE = 50;
+
+	/**
 	 * Session key for base redemption amount.
 	 */
 	const SESSION_REDEMPTION_KEY = 'kd_bonus_redemption_base';
@@ -320,6 +330,15 @@ class KD_Bonus_Rewards {
 			'manage_network_options',
 			'kd-bonus-events',
 			array( $this, 'render_event_log_page' )
+		);
+
+		add_submenu_page(
+			KD_Bonus_Settings::MENU_SLUG,
+			__( 'Users with Rewards', 'kd-bonus' ),
+			__( 'Users with Rewards', 'kd-bonus' ),
+			'manage_network_options',
+			self::USERS_WITH_REWARDS_SUBMENU_SLUG,
+			array( $this, 'render_users_with_rewards_page' )
 		);
 	}
 
@@ -1752,6 +1771,109 @@ class KD_Bonus_Rewards {
 					<?php endif; ?>
 				</tbody>
 			</table>
+		</div>
+		<?php
+	}
+
+	/**
+	 * Render the network-wide users with rewards page.
+	 */
+	public function render_users_with_rewards_page() {
+		if ( ! current_user_can( 'manage_network_options' ) ) {
+			wp_die( esc_html__( 'You do not have permission to view users with rewards.', 'kd-bonus' ) );
+		}
+
+		$page        = isset( $_GET['paged'] ) ? max( 1, absint( wp_unslash( $_GET['paged'] ) ) ) : 1;
+		$per_page    = self::USERS_WITH_REWARDS_PER_PAGE;
+		$users_query = new WP_User_Query(
+			array(
+				'number'      => $per_page,
+				'offset'      => ( $page - 1 ) * $per_page,
+				'orderby'     => 'meta_value_num',
+				'order'       => 'DESC',
+				'meta_key'    => self::BALANCE_META,
+				'meta_type'   => 'DECIMAL',
+				'meta_query'  => array(
+					array(
+						'key'     => self::BALANCE_META,
+						'value'   => 0,
+						'compare' => '>',
+						'type'    => 'DECIMAL',
+					),
+				),
+				'count_total' => true,
+			)
+		);
+		$users            = array();
+		foreach ( $users_query->get_results() as $user ) {
+			$balance = $this->get_balance( $user->ID );
+			if ( $balance <= 0 ) {
+				continue;
+			}
+
+			$users[] = array(
+				'user'    => $user,
+				'balance' => $balance,
+			);
+		}
+		$total_users      = (int) $users_query->get_total();
+		$total_pages      = max( 1, (int) ceil( $total_users / $per_page ) );
+		$currency         = $this->get_base_currency();
+		$balance_decimals = function_exists( 'wc_get_price_decimals' ) ? wc_get_price_decimals() : 2;
+		?>
+		<div class="wrap">
+			<h1><?php esc_html_e( 'Users with Rewards', 'kd-bonus' ); ?></h1>
+			<p><?php esc_html_e( 'Showing users with a reward balance greater than zero.', 'kd-bonus' ); ?></p>
+			<table class="widefat striped">
+				<thead>
+					<tr>
+						<th><?php esc_html_e( 'User\u2019s real name', 'kd-bonus' ); ?></th>
+						<th><?php esc_html_e( 'Balance', 'kd-bonus' ); ?></th>
+						<th><?php esc_html_e( 'Currency', 'kd-bonus' ); ?></th>
+					</tr>
+				</thead>
+				<tbody>
+					<?php if ( empty( $users ) ) : ?>
+						<tr>
+							<td colspan="3"><?php esc_html_e( 'No users currently have a reward balance above zero.', 'kd-bonus' ); ?></td>
+						</tr>
+					<?php else : ?>
+						<?php foreach ( $users as $user_data ) : ?>
+							<?php
+							$user              = $user_data['user'];
+							$balance           = $user_data['balance'];
+							$user_name         = '' !== $user->display_name ? $user->display_name : sprintf( __( 'User #%d', 'kd-bonus' ), $user->ID );
+							$edit_profile_link = network_admin_url( 'user-edit.php?user_id=' . $user->ID );
+							?>
+							<tr>
+								<td><a href="<?php echo esc_url( $edit_profile_link ); ?>"><?php echo esc_html( $user_name ); ?></a></td>
+								<td><?php echo esc_html( number_format_i18n( $balance, $balance_decimals ) ); ?></td>
+								<td><?php echo esc_html( '' !== $currency ? $currency : '—' ); ?></td>
+							</tr>
+						<?php endforeach; ?>
+					<?php endif; ?>
+				</tbody>
+			</table>
+			<?php if ( $total_pages > 1 ) : ?>
+				<div class="tablenav">
+					<div class="tablenav-pages" style="margin: 16px 0;">
+						<?php
+						echo wp_kses_post(
+							paginate_links(
+								array(
+									'base'      => add_query_arg( 'paged', '%#%' ),
+									'format'    => '',
+									'current'   => $page,
+									'total'     => $total_pages,
+									'prev_text' => __( '&laquo;', 'kd-bonus' ),
+									'next_text' => __( '&raquo;', 'kd-bonus' ),
+								)
+							)
+						);
+						?>
+					</div>
+				</div>
+			<?php endif; ?>
 		</div>
 		<?php
 	}
