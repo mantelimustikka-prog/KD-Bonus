@@ -395,11 +395,11 @@ class KD_Bonus_Settings {
 		<tr>
 			<th scope="row"><?php esc_html_e( 'Membership Status Rules', 'kd-bonus' ); ?></th>
 			<td>
-				<p class="description"><?php esc_html_e( 'Add, edit, or delete as many statuses as needed. Rows are saved in ascending priority order, then renumbered starting from 1. Membership resolution still uses required spend first, then priority when thresholds match. Reward percentage is applied to eligible product subtotal only.', 'kd-bonus' ); ?></p>
+				<p class="description"><?php esc_html_e( 'Add, edit, or delete as many statuses as needed. Rows are saved in ascending priority order (1 = first), then renumbered starting from 1. When thresholds match, the row with the lower priority number wins. Reward percentage is applied to eligible product subtotal only.', 'kd-bonus' ); ?></p>
 				<table class="widefat striped" id="kd-bonus-status-table">
 					<thead>
 						<tr>
-							<th><?php esc_html_e( 'Priority (Higher Wins)', 'kd-bonus' ); ?></th>
+							<th><?php esc_html_e( 'Priority', 'kd-bonus' ); ?></th>
 							<th><?php esc_html_e( 'Status Name', 'kd-bonus' ); ?></th>
 							<th><?php esc_html_e( 'Required Product Spend', 'kd-bonus' ); ?></th>
 							<th><?php esc_html_e( 'Reward Percentage', 'kd-bonus' ); ?></th>
