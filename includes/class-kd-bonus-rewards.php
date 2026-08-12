@@ -16,7 +16,7 @@ class KD_Bonus_Rewards {
 	const MEMBERSHIP_REBUILD_STATE_OPTION = 'kd_bonus_membership_rebuild_state';
 
 	/**
-	 * Action hook used to process one rebuild batch.
+	 * Legacy cron hook key kept only to clear stale scheduled events from older versions.
 	 */
 	const MEMBERSHIP_REBUILD_CRON_HOOK = 'kd_bonus_process_membership_rebuild_batch';
 
@@ -109,8 +109,8 @@ class KD_Bonus_Rewards {
 		add_action( 'network_admin_notices', array( $this, 'render_copy_status_from_bfw_notice' ) );
 		add_action( 'network_admin_menu', array( $this, 'register_event_log_submenu' ) );
 		add_action( 'kd_bonus_request_membership_rebuild', array( $this, 'start_membership_rebuild' ), 10, 2 );
+		add_action( 'kd_bonus_continue_membership_rebuild', array( $this, 'continue_membership_rebuild' ) );
 		add_action( 'kd_bonus_revoke_membership_rebuild', array( $this, 'revoke_membership_rebuild' ) );
-		add_action( self::MEMBERSHIP_REBUILD_CRON_HOOK, array( $this, 'process_membership_rebuild_batch' ) );
 		add_action( 'wp_ajax_kd_bonus_membership_rebuild_progress', array( $this, 'ajax_membership_rebuild_progress' ) );
 
 		if ( ! class_exists( 'WooCommerce' ) ) {
@@ -203,13 +203,13 @@ class KD_Bonus_Rewards {
 
 		if ( $do_reset ) {
 			$initial_phase   = 'reset_users';
-			$initial_message = __( 'Resetting existing membership state before historical spend rebuild.', 'kd-bonus' );
+			$initial_message = __( 'Rebuild initialized. Click "Continue rebuild" to process the next batch (reset users phase).', 'kd-bonus' );
 		} elseif ( $reset_enabled && ! $has_stored_status ) {
 			$initial_phase   = 'scan_orders';
-			$initial_message = __( 'Reset skipped automatically: no existing Bonus Status data found. Scanning WooCommerce orders to rebuild lifetime spend.', 'kd-bonus' );
+			$initial_message = __( 'Rebuild initialized. Reset skipped automatically: no existing Bonus Status data found. Click "Continue rebuild" to process order scanning batches.', 'kd-bonus' );
 		} else {
 			$initial_phase   = 'scan_orders';
-			$initial_message = __( 'Reset phase skipped. Scanning WooCommerce orders to rebuild lifetime spend.', 'kd-bonus' );
+			$initial_message = __( 'Rebuild initialized. Reset phase skipped. Click "Continue rebuild" to process order scanning batches.', 'kd-bonus' );
 		}
 
 		$state = array(
@@ -238,7 +238,18 @@ class KD_Bonus_Rewards {
 		);
 
 		$this->save_membership_rebuild_state( $state );
-		$this->schedule_membership_rebuild_batch();
+	}
+
+	/**
+	 * Continue one rebuild batch from persisted state.
+	 */
+	public function continue_membership_rebuild() {
+		$state = self::get_membership_rebuild_state();
+		if ( empty( $state['running'] ) ) {
+			return;
+		}
+
+		$this->process_membership_rebuild_batch();
 	}
 
 	/**
@@ -2436,27 +2447,6 @@ class KD_Bonus_Rewards {
 	}
 
 	/**
-	 * Schedule the next batch run.
-	 */
-	private function schedule_membership_rebuild_batch() {
-		$main_site_id = function_exists( 'get_main_site_id' ) ? (int) get_main_site_id() : 0;
-		$current_id   = get_current_blog_id();
-		$switched     = $main_site_id > 0 && $main_site_id !== $current_id;
-
-		if ( $switched ) {
-			switch_to_blog( $main_site_id );
-		}
-
-		if ( ! wp_next_scheduled( self::MEMBERSHIP_REBUILD_CRON_HOOK ) ) {
-			wp_schedule_single_event( time() + 1, self::MEMBERSHIP_REBUILD_CRON_HOOK );
-		}
-
-		if ( $switched ) {
-			restore_current_blog();
-		}
-	}
-
-	/**
 	 * Process one user-reset batch.
 	 *
 	 * @param array<string,mixed> $state State payload.
@@ -2469,7 +2459,6 @@ class KD_Bonus_Rewards {
 			$state['site_index']    = 0;
 			$state['order_page']    = 1;
 			$this->save_membership_rebuild_state( $state );
-			$this->schedule_membership_rebuild_batch();
 			return;
 		}
 
@@ -2481,7 +2470,6 @@ class KD_Bonus_Rewards {
 		$state['user_reset_last_id']   = (int) end( $user_ids );
 		$state['user_reset_processed'] = (int) $state['user_reset_processed'] + count( $user_ids );
 		$this->save_membership_rebuild_state( $state );
-		$this->schedule_membership_rebuild_batch();
 	}
 
 	/**
@@ -2498,7 +2486,6 @@ class KD_Bonus_Rewards {
 			$state['message']                = __( 'Updating membership statuses from rebuilt lifetime spend.', 'kd-bonus' );
 			$state['status_rebuild_last_id'] = 0;
 			$this->save_membership_rebuild_state( $state );
-			$this->schedule_membership_rebuild_batch();
 			return;
 		}
 
@@ -2551,7 +2538,6 @@ class KD_Bonus_Rewards {
 			$state['site_index']    = $site_index + 1;
 			$state['order_page']    = 1;
 			$this->save_membership_rebuild_state( $state );
-			$this->schedule_membership_rebuild_batch();
 			return;
 		}
 
@@ -2567,7 +2553,6 @@ class KD_Bonus_Rewards {
 			$state['order_page'] = 1;
 		}
 		$this->save_membership_rebuild_state( $state );
-		$this->schedule_membership_rebuild_batch();
 	}
 
 	/**
@@ -2611,7 +2596,6 @@ class KD_Bonus_Rewards {
 		$state['status_rebuild_last_id']  = (int) end( $user_ids );
 		$state['status_rebuild_processed'] = (int) $state['status_rebuild_processed'] + count( $user_ids );
 		$this->save_membership_rebuild_state( $state );
-		$this->schedule_membership_rebuild_batch();
 	}
 
 	/**

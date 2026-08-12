@@ -35,6 +35,7 @@ class KD_Bonus_Settings {
 
 		add_action( 'network_admin_menu', array( $this, 'register_menu' ) );
 		add_action( 'network_admin_edit_kd_bonus_save_settings', array( $this, 'save_settings' ) );
+		add_action( 'network_admin_edit_kd_bonus_continue_rebuild', array( $this, 'continue_rebuild' ) );
 		add_action( 'network_admin_edit_kd_bonus_revoke_rebuild', array( $this, 'revoke_rebuild' ) );
 	}
 
@@ -158,7 +159,7 @@ class KD_Bonus_Settings {
 			wp_die( esc_html__( 'You do not have permission to manage KD Bonus settings.', 'kd-bonus' ) );
 		}
 
-		$settings = self::get_settings();
+		$settings          = self::get_settings();
 		$rebuild_requested = false;
 		$tab      = isset( $_GET['tab'] ) ? sanitize_key( wp_unslash( $_GET['tab'] ) ) : 'general';
 		$tabs     = array(
@@ -186,7 +187,16 @@ class KD_Bonus_Settings {
 				<div class="notice notice-success is-dismissible"><p><?php esc_html_e( 'KD Bonus settings updated.', 'kd-bonus' ); ?></p></div>
 			<?php endif; ?>
 			<?php if ( isset( $_GET['rebuild'] ) && 'started' === sanitize_key( wp_unslash( $_GET['rebuild'] ) ) ) : ?>
-				<div class="notice notice-warning is-dismissible"><p><?php esc_html_e( 'Membership rebuild has started in background. You can keep this page open to monitor progress.', 'kd-bonus' ); ?></p></div>
+				<div class="notice notice-warning is-dismissible"><p><?php esc_html_e( 'Membership rebuild has started. Click "Continue rebuild" to process one batch at a time.', 'kd-bonus' ); ?></p></div>
+			<?php endif; ?>
+			<?php if ( isset( $_GET['rebuild'] ) && 'continued' === sanitize_key( wp_unslash( $_GET['rebuild'] ) ) ) : ?>
+				<div class="notice notice-info is-dismissible"><p><?php esc_html_e( 'Processed one rebuild batch. Click "Continue rebuild" again to process the next batch.', 'kd-bonus' ); ?></p></div>
+			<?php endif; ?>
+			<?php if ( isset( $_GET['rebuild'] ) && 'completed' === sanitize_key( wp_unslash( $_GET['rebuild'] ) ) ) : ?>
+				<div class="notice notice-success is-dismissible"><p><?php esc_html_e( 'Membership rebuild is already complete. Start a new rebuild to run it again.', 'kd-bonus' ); ?></p></div>
+			<?php endif; ?>
+			<?php if ( isset( $_GET['rebuild'] ) && 'failed' === sanitize_key( wp_unslash( $_GET['rebuild'] ) ) ) : ?>
+				<div class="notice notice-error is-dismissible"><p><?php esc_html_e( 'Membership rebuild failed. Review the rebuild message below and start a new rebuild if needed.', 'kd-bonus' ); ?></p></div>
 			<?php endif; ?>
 			<?php if ( isset( $_GET['revoke'] ) && 'done' === sanitize_key( wp_unslash( $_GET['revoke'] ) ) ) : ?>
 				<div class="notice notice-success is-dismissible"><p><?php esc_html_e( 'Membership rebuild has been cancelled and all rebuild state has been cleared. You can now start a new rebuild.', 'kd-bonus' ); ?></p></div>
@@ -220,7 +230,8 @@ class KD_Bonus_Settings {
 		$tab = isset( $_POST['kd_bonus_tab'] ) ? sanitize_key( wp_unslash( $_POST['kd_bonus_tab'] ) ) : 'general';
 		check_admin_referer( 'kd_bonus_save_settings_' . $tab );
 
-		$settings = self::get_settings();
+		$settings          = self::get_settings();
+		$rebuild_requested = false;
 
 		switch ( $tab ) {
 			case 'statuses':
@@ -302,6 +313,43 @@ class KD_Bonus_Settings {
 	}
 
 	/**
+	 * Process one explicit rebuild batch from Network Admin.
+	 */
+	public function continue_rebuild() {
+		if ( ! current_user_can( 'manage_network_options' ) ) {
+			wp_die( esc_html__( 'You do not have permission to manage KD Bonus settings.', 'kd-bonus' ) );
+		}
+
+		check_admin_referer( 'kd_bonus_continue_rebuild' );
+
+		if ( class_exists( 'KD_Bonus_Rewards' ) ) {
+			do_action( 'kd_bonus_continue_membership_rebuild' );
+		}
+
+		$rebuild_state = class_exists( 'KD_Bonus_Rewards' ) ? KD_Bonus_Rewards::get_membership_rebuild_state() : array();
+		$is_running    = ! empty( $rebuild_state['running'] );
+		$is_failed     = ! $is_running && ( ( isset( $rebuild_state['status'] ) && 'failed' === sanitize_key( (string) $rebuild_state['status'] ) ) || ( isset( $rebuild_state['phase'] ) && 'failed' === sanitize_key( (string) $rebuild_state['phase'] ) ) );
+		$rebuild_query = 'completed';
+		if ( $is_running ) {
+			$rebuild_query = 'continued';
+		} elseif ( $is_failed ) {
+			$rebuild_query = 'failed';
+		}
+
+		wp_safe_redirect(
+			add_query_arg(
+				array(
+					'page'    => self::SETTINGS_SUBMENU_SLUG,
+					'tab'     => 'general',
+					'rebuild' => $rebuild_query,
+				),
+				network_admin_url( 'admin.php' )
+			)
+		);
+		exit;
+	}
+
+	/**
 	 * Render tab fields.
 	 *
 	 * @param string               $tab Current tab.
@@ -341,8 +389,7 @@ class KD_Bonus_Settings {
 		$status_users  = isset( $rebuild_state['status_rebuild_processed'] ) ? (int) $rebuild_state['status_rebuild_processed'] : 0;
 		$state_message = isset( $rebuild_state['message'] ) ? (string) $rebuild_state['message'] : '';
 		$recent_logs   = isset( $rebuild_state['recent_logs'] ) && is_array( $rebuild_state['recent_logs'] ) ? array_values( array_map( 'sanitize_text_field', $rebuild_state['recent_logs'] ) ) : array();
-		$poll_nonce    = wp_create_nonce( 'kd_bonus_membership_rebuild_progress' );
-		$poll_url      = admin_url( 'admin-ajax.php' );
+		$is_completed  = ! $is_rebuilding && 'completed' === $rebuild_phase;
 		?>
 		<tr>
 			<th scope="row"><label for="dashboard_page_slug"><?php esc_html_e( 'Dashboard Page Slug', 'kd-bonus' ); ?></label></th>
@@ -394,7 +441,19 @@ class KD_Bonus_Settings {
 					<?php disabled( $is_rebuilding ); ?>
 					onclick="return window.confirm('<?php echo esc_js( __( 'This will recalculate all membership statuses from historical spend. If the reset checkbox is checked, existing status values will be cleared first. This may take a long time.', 'kd-bonus' ) ); ?>');"
 				><?php esc_html_e( 'Run Rebuild', 'kd-bonus' ); ?></button>
-				<p class="description"><?php esc_html_e( 'Scans stored WooCommerce orders, recalculates customer lifetime eligible spend, and rebuilds membership statuses in background batches.', 'kd-bonus' ); ?></p>
+				<p class="description"><?php esc_html_e( 'Initializes a resumable rebuild state. Then use "Continue rebuild" to process one small batch per click until complete.', 'kd-bonus' ); ?></p>
+				<?php if ( $is_rebuilding ) : ?>
+					<p>
+						<a
+							href="<?php echo esc_url( wp_nonce_url( network_admin_url( 'edit.php?action=kd_bonus_continue_rebuild' ), 'kd_bonus_continue_rebuild' ) ); ?>"
+							class="button button-secondary"
+						><?php esc_html_e( 'Continue rebuild', 'kd-bonus' ); ?></a>
+					</p>
+				<?php elseif ( $is_completed ) : ?>
+					<p>
+						<button type="button" class="button button-secondary" disabled><?php esc_html_e( 'Continue rebuild (completed)', 'kd-bonus' ); ?></button>
+					</p>
+				<?php endif; ?>
 				<?php if ( ! empty( $state_message ) ) : ?>
 					<p><strong><?php echo esc_html( $state_message ); ?></strong></p>
 				<?php endif; ?>
@@ -439,99 +498,6 @@ class KD_Bonus_Settings {
 						><?php esc_html_e( 'Revoke Rebuild', 'kd-bonus' ); ?></a>
 					</p>
 				<?php endif; ?>
-				<script>
-					(function () {
-						const panel = document.getElementById('kd-bonus-rebuild-progress-log');
-						const summary = document.getElementById('kd-bonus-rebuild-summary');
-						const requestUrl = <?php echo wp_json_encode( $poll_url ); ?>;
-						const requestNonce = <?php echo wp_json_encode( $poll_nonce ); ?>;
-						const labels = <?php echo wp_json_encode( array(
-							'phase'        => __( 'Phase', 'kd-bonus' ),
-							'reset'        => __( 'Reset users', 'kd-bonus' ),
-							'reset_skip'   => __( 'skipped', 'kd-bonus' ),
-							'orders'       => __( 'Orders scanned', 'kd-bonus' ),
-							'status'       => __( 'Statuses rebuilt', 'kd-bonus' ),
-						) ); ?>;
-						let active = <?php echo wp_json_encode( (bool) $is_rebuilding ); ?>;
-						let timer = null;
-						if (!panel || !summary || !requestUrl || !requestNonce || !window.fetch) {
-							return;
-						}
-
-						const renderLogs = function (logs) {
-							panel.innerHTML = '';
-							if (!Array.isArray(logs) || !logs.length) {
-								const empty = document.createElement('div');
-								empty.textContent = <?php echo wp_json_encode( __( 'No per-user updates yet.', 'kd-bonus' ) ); ?>;
-								panel.appendChild(empty);
-								return;
-							}
-							logs.forEach(function (entry) {
-								const row = document.createElement('div');
-								row.textContent = String(entry || '');
-								panel.appendChild(row);
-							});
-							panel.scrollTop = panel.scrollHeight;
-						};
-
-						const poll = function () {
-							const body = new URLSearchParams();
-							body.append('action', 'kd_bonus_membership_rebuild_progress');
-							body.append('nonce', requestNonce);
-							return fetch(requestUrl, {
-								method: 'POST',
-								headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
-								body: body.toString(),
-								credentials: 'same-origin'
-							})
-								.then(function (response) { return response.json(); })
-								.then(function (result) {
-									if (!result || !result.success || !result.data) {
-										return;
-									}
-									const data = result.data;
-									const resetLabel = data.reset_skipped
-										? String(labels.reset || 'Reset users') + ': ' + String(labels.reset_skip || 'skipped')
-										: String(labels.reset || 'Reset users') + ': ' + String(data.users_reset || 0) + '/' + String(data.users_total || 0);
-									summary.textContent = [
-										String(labels.phase || 'Phase') + ': ' + String(data.phase || ''),
-										resetLabel,
-										String(labels.orders || 'Orders scanned') + ': ' + String(data.orders_processed || 0) + '/' + String(data.orders_total || 0),
-										String(labels.status || 'Statuses rebuilt') + ': ' + String(data.users_processed || 0) + '/' + String(data.users_total || 0)
-									].join(' | ');
-									renderLogs(data.recent_logs || []);
-									active = !!data.running;
-									if (!active && timer) {
-										window.clearInterval(timer);
-										timer = null;
-									}
-									if (data.failed && data.message) {
-										panel.innerHTML = '';
-										const error = document.createElement('div');
-										error.textContent = String(data.message);
-										panel.appendChild(error);
-									}
-								})
-								.catch(function () {
-									active = false;
-									if (timer) {
-										window.clearInterval(timer);
-										timer = null;
-									}
-								});
-						};
-
-						if (active) {
-							poll();
-							timer = window.setInterval(function () {
-								if (!active) {
-									return;
-								}
-								poll();
-							}, 5000);
-						}
-					}());
-				</script>
 			</td>
 		</tr>
 		<?php
