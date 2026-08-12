@@ -36,10 +36,68 @@ class KD_Bonus_Dashboard {
 	}
 
 	/**
-	 * Register dashboard shortcode.
+	 * WooCommerce My Account endpoint slug.
+	 */
+	const MY_ACCOUNT_ENDPOINT = 'my-kd';
+
+	/**
+	 * Register dashboard shortcode and WooCommerce My Account endpoint.
 	 */
 	public function register() {
 		add_shortcode( 'kd_bonus_dashboard', array( $this, 'render_shortcode' ) );
+
+		if ( ! class_exists( 'WooCommerce' ) ) {
+			return;
+		}
+
+		add_action( 'init', array( $this, 'register_my_account_endpoint' ) );
+		add_filter( 'woocommerce_account_menu_items', array( $this, 'add_my_account_menu_item' ) );
+		add_action( 'woocommerce_account_' . self::MY_ACCOUNT_ENDPOINT . '_endpoint', array( $this, 'render_my_account_endpoint' ) );
+	}
+
+	/**
+	 * Register the My Account query-var / rewrite endpoint.
+	 */
+	public function register_my_account_endpoint() {
+		add_rewrite_endpoint( self::MY_ACCOUNT_ENDPOINT, EP_ROOT | EP_PAGES );
+	}
+
+	/**
+	 * Add "My $KD" item to the WooCommerce My Account navigation.
+	 *
+	 * @param array<string,string> $items Existing menu items.
+	 * @return array<string,string>
+	 */
+	public function add_my_account_menu_item( $items ) {
+		if ( ! is_user_logged_in() ) {
+			return $items;
+		}
+
+		$settings    = KD_Bonus_Settings::get_settings();
+		$label       = sprintf(
+			/* translators: %s: reward symbol */
+			__( 'My %s', 'kd-bonus' ),
+			! empty( $settings['reward_symbol'] ) ? $settings['reward_symbol'] : '$KD'
+		);
+
+		// Insert before the logout link when present.
+		$logout_offset = array_search( 'customer-logout', array_keys( $items ), true );
+		if ( false !== $logout_offset ) {
+			$items = array_slice( $items, 0, $logout_offset, true )
+				+ array( self::MY_ACCOUNT_ENDPOINT => $label )
+				+ array_slice( $items, $logout_offset, null, true );
+		} else {
+			$items[ self::MY_ACCOUNT_ENDPOINT ] = $label;
+		}
+
+		return $items;
+	}
+
+	/**
+	 * Render the customer dashboard on the My Account endpoint.
+	 */
+	public function render_my_account_endpoint() {
+		echo wp_kses_post( $this->render_shortcode() );
 	}
 
 	/**
