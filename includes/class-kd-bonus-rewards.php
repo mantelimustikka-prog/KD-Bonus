@@ -322,9 +322,8 @@ class KD_Bonus_Rewards {
 		$settings = $this->get_reward_settings();
 		$symbol   = $settings['reward_symbol'] ?? '$KD';
 		$symbol   = '' !== $symbol ? $symbol : '$KD';
-		$decimals = function_exists( 'wc_get_price_decimals' ) ? wc_get_price_decimals() : 2;
 		$amount   = (float) $amount;
-		$scale    = abs( $amount - round( $amount ) ) < 0.00001 ? 0 : $decimals;
+		$scale    = abs( $amount - round( $amount ) ) < 0.00001 ? 0 : ( function_exists( 'wc_get_price_decimals' ) ? wc_get_price_decimals() : 2 );
 
 		return sprintf( '%1$s %2$s', number_format_i18n( $amount, $scale ), $symbol );
 	}
