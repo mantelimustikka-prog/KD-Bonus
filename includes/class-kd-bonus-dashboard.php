@@ -45,6 +45,7 @@ class KD_Bonus_Dashboard {
 	 */
 	public function register() {
 		add_shortcode( 'kd_bonus_dashboard', array( $this, 'render_shortcode' ) );
+		add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_frontend_styles' ) );
 
 		if ( ! class_exists( 'WooCommerce' ) ) {
 			return;
@@ -53,6 +54,18 @@ class KD_Bonus_Dashboard {
 		add_action( 'init', array( $this, 'register_my_account_endpoint' ) );
 		add_filter( 'woocommerce_account_menu_items', array( $this, 'add_my_account_menu_item' ) );
 		add_action( 'woocommerce_account_' . self::MY_ACCOUNT_ENDPOINT . '_endpoint', array( $this, 'render_my_account_endpoint' ) );
+	}
+
+	/**
+	 * Enqueue frontend stylesheet for the dashboard.
+	 */
+	public function enqueue_frontend_styles() {
+		wp_enqueue_style(
+			'kd-bonus-frontend',
+			KD_BONUS_PLUGIN_URL . 'assets/css/kd-bonus-frontend.css',
+			array(),
+			KD_BONUS_VERSION
+		);
 	}
 
 	/**
@@ -136,27 +149,6 @@ class KD_Bonus_Dashboard {
 		<div class="kd-bonus-dashboard">
 			<?php if ( ! empty( $all_statuses ) ) : ?>
 			<div class="kd-bonus-tier-progress" style="margin-bottom:24px;">
-				<style>
-					.kd-bonus-tier-progress__bar{display:flex;align-items:flex-start;position:relative;padding:12px 0 32px;}
-					.kd-bonus-tier-progress__bar::before{content:'';position:absolute;top:16px;left:0;right:0;height:4px;background:#dcdcde;z-index:0;}
-					.kd-bonus-tier-progress__step{flex:1;display:flex;flex-direction:column;align-items:center;position:relative;z-index:1;}
-					.kd-bonus-tier-progress__dot{width:32px;height:32px;border-radius:50%;border:3px solid #dcdcde;background:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;transition:background .2s,border-color .2s;}
-					.kd-bonus-tier-progress__step--completed .kd-bonus-tier-progress__dot{background:#4caf50;border-color:#4caf50;color:#fff;}
-					.kd-bonus-tier-progress__step--current .kd-bonus-tier-progress__dot{background:#f5a623;border-color:#f5a623;color:#fff;box-shadow:0 0 0 4px rgba(245,166,35,.25);}
-					.kd-bonus-tier-progress__step--future .kd-bonus-tier-progress__dot{background:#fff;border-color:#dcdcde;color:#aaa;}
-					.kd-bonus-tier-progress__label{margin-top:8px;font-size:11px;text-align:center;word-break:break-word;max-width:80px;line-height:1.3;}
-					.kd-bonus-tier-progress__step--current .kd-bonus-tier-progress__label{font-weight:700;color:#f5a623;}
-					.kd-bonus-tier-progress__step--completed .kd-bonus-tier-progress__label{color:#4caf50;}
-					.kd-bonus-tier-progress__step--future .kd-bonus-tier-progress__label{color:#aaa;}
-					.kd-bonus-tier-progress__connector{position:absolute;top:16px;left:50%;right:-50%;height:4px;z-index:0;}
-					.kd-bonus-tier-progress__step--completed .kd-bonus-tier-progress__connector{background:#4caf50;}
-					.kd-bonus-tier-progress__step--current .kd-bonus-tier-progress__connector{background:#dcdcde;}
-					.kd-bonus-tier-progress__step--future .kd-bonus-tier-progress__connector{background:#dcdcde;}
-					@media(max-width:480px){
-						.kd-bonus-tier-progress__label{font-size:9px;max-width:56px;}
-						.kd-bonus-tier-progress__dot{width:24px;height:24px;font-size:10px;}
-					}
-				</style>
 				<div class="kd-bonus-tier-progress__bar">
 					<?php
 					$total_steps = count( $all_statuses );
