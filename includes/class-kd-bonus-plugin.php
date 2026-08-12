@@ -76,6 +76,10 @@ class KD_Bonus_Plugin {
 		KD_Bonus_Settings::ensure_defaults();
 		KD_Bonus_Rewards::create_transaction_table();
 
+		// Register the My Account endpoint so rewrite rules can be flushed.
+		add_rewrite_endpoint( KD_Bonus_Dashboard::MY_ACCOUNT_ENDPOINT, EP_ROOT | EP_PAGES );
+		flush_rewrite_rules();
+
 		if ( is_multisite() && $network_wide ) {
 			self::ensure_dashboard_pages_for_all_sites();
 
