@@ -158,6 +158,7 @@ class KD_Bonus_Settings {
 		}
 
 		$settings = self::get_settings();
+		$rebuild_requested = false;
 		$tab      = isset( $_GET['tab'] ) ? sanitize_key( wp_unslash( $_GET['tab'] ) ) : 'general';
 		$tabs     = array(
 			'general'  => __( 'General Settings', 'kd-bonus' ),
@@ -182,6 +183,9 @@ class KD_Bonus_Settings {
 			</nav>
 			<?php if ( isset( $_GET['updated'] ) ) : ?>
 				<div class="notice notice-success is-dismissible"><p><?php esc_html_e( 'KD Bonus settings updated.', 'kd-bonus' ); ?></p></div>
+			<?php endif; ?>
+			<?php if ( isset( $_GET['rebuild'] ) && 'started' === sanitize_key( wp_unslash( $_GET['rebuild'] ) ) ) : ?>
+				<div class="notice notice-warning is-dismissible"><p><?php esc_html_e( 'Membership rebuild has started in background. You can keep this page open to monitor progress.', 'kd-bonus' ); ?></p></div>
 			<?php endif; ?>
 			<?php if ( 'events' === $tab ) : ?>
 				<?php $this->render_event_log_tab(); ?>
@@ -232,12 +236,16 @@ class KD_Bonus_Settings {
 				break;
 			case 'general':
 			default:
+				$rebuild_requested = ! empty( $_POST['kd_bonus_rebuild_memberships'] );
 				$settings['dashboard_page_slug']        = sanitize_title( wp_unslash( $_POST['dashboard_page_slug'] ?? 'kd-bonus-dashboard' ) );
 				$settings['dashboard_page_slug']        = $settings['dashboard_page_slug'] ? $settings['dashboard_page_slug'] : 'kd-bonus-dashboard';
 				$settings['auto_create_dashboard_page'] = ! empty( $_POST['auto_create_dashboard_page'] ) ? 1 : 0;
 				$settings['checkout_redemption']        = ! empty( $_POST['checkout_redemption'] ) ? 1 : 0;
 				$settings['award_order_status']         = $this->sanitize_award_order_status( wp_unslash( $_POST['award_order_status'] ?? '' ) );
 				$settings['reward_expiry_days']         = max( 0, absint( wp_unslash( $_POST['reward_expiry_days'] ?? 0 ) ) );
+				if ( $rebuild_requested ) {
+					do_action( 'kd_bonus_request_membership_rebuild', get_current_user_id() );
+				}
 				break;
 		}
 
@@ -247,16 +255,17 @@ class KD_Bonus_Settings {
 			KD_Bonus_Plugin::ensure_dashboard_pages_for_all_sites();
 		}
 
-		wp_safe_redirect(
-			add_query_arg(
-				array(
-					'page'    => self::SETTINGS_SUBMENU_SLUG,
-					'tab'     => $tab,
-					'updated' => 1,
-				),
-				network_admin_url( 'admin.php' )
-			)
+		$redirect_args = array(
+			'page'    => self::SETTINGS_SUBMENU_SLUG,
+			'tab'     => $tab,
+			'updated' => 1,
 		);
+
+		if ( $rebuild_requested ) {
+			$redirect_args['rebuild'] = 'started';
+		}
+
+		wp_safe_redirect( add_query_arg( $redirect_args, network_admin_url( 'admin.php' ) ) );
 		exit;
 	}
 
@@ -290,6 +299,15 @@ class KD_Bonus_Settings {
 	 * @param array<string,mixed> $settings Settings array.
 	 */
 	private function render_general_fields( $settings ) {
+		$rebuild_state = class_exists( 'KD_Bonus_Rewards' ) ? KD_Bonus_Rewards::get_membership_rebuild_state() : array();
+		$is_rebuilding = ! empty( $rebuild_state['running'] );
+		$rebuild_phase = isset( $rebuild_state['phase'] ) ? (string) $rebuild_state['phase'] : '';
+		$total_orders  = isset( $rebuild_state['total_orders'] ) ? (int) $rebuild_state['total_orders'] : 0;
+		$done_orders   = isset( $rebuild_state['processed_orders'] ) ? (int) $rebuild_state['processed_orders'] : 0;
+		$total_users   = isset( $rebuild_state['total_users'] ) ? (int) $rebuild_state['total_users'] : 0;
+		$reset_users   = isset( $rebuild_state['user_reset_processed'] ) ? (int) $rebuild_state['user_reset_processed'] : 0;
+		$status_users  = isset( $rebuild_state['status_rebuild_processed'] ) ? (int) $rebuild_state['status_rebuild_processed'] : 0;
+		$state_message = isset( $rebuild_state['message'] ) ? (string) $rebuild_state['message'] : '';
 		?>
 		<tr>
 			<th scope="row"><label for="dashboard_page_slug"><?php esc_html_e( 'Dashboard Page Slug', 'kd-bonus' ); ?></label></th>
@@ -324,6 +342,49 @@ class KD_Bonus_Settings {
 				<p class="description"><?php esc_html_e( 'Set to 0 to disable expiry. Any unused KD Bonus balance expires this many days after the customer last received reward points.', 'kd-bonus' ); ?></p>
 			</td>
 		</tr>
+		<tr>
+			<th scope="row"><?php esc_html_e( 'Update Memberships from existing spends', 'kd-bonus' ); ?></th>
+			<td>
+				<button
+					type="submit"
+					name="kd_bonus_rebuild_memberships"
+					value="1"
+					class="button button-secondary"
+					<?php disabled( $is_rebuilding ); ?>
+					onclick="return window.confirm('<?php echo esc_js( __( 'This will reset all existing current membership and recalculate them from historical spend. This may take a long time.', 'kd-bonus' ) ); ?>');"
+				><?php esc_html_e( 'Run Rebuild', 'kd-bonus' ); ?></button>
+				<p class="description"><?php esc_html_e( 'Scans stored WooCommerce orders, recalculates customer lifetime eligible spend, and rebuilds membership statuses in background batches.', 'kd-bonus' ); ?></p>
+				<?php if ( ! empty( $state_message ) ) : ?>
+					<p><strong><?php echo esc_html( $state_message ); ?></strong></p>
+				<?php endif; ?>
+				<?php if ( ! empty( $rebuild_phase ) ) : ?>
+					<p>
+						<?php
+						echo esc_html(
+							sprintf(
+								/* translators: 1: rebuild phase, 2: reset users count, 3: total users, 4: processed orders, 5: total orders, 6: status rebuilt users, 7: total users. */
+								__( 'Phase: %1$s | Reset users: %2$d/%3$d | Orders scanned: %4$d/%5$d | Statuses rebuilt: %6$d/%7$d', 'kd-bonus' ),
+								$rebuild_phase,
+								$reset_users,
+								$total_users,
+								$done_orders,
+								$total_orders,
+								$status_users,
+								$total_users
+							)
+						);
+						?>
+					</p>
+				<?php endif; ?>
+				<?php if ( $is_rebuilding ) : ?>
+					<script>
+						setTimeout(function () {
+							window.location.reload();
+						}, 10000);
+					</script>
+				<?php endif; ?>
+			</td>
+		</tr>
 		<?php
 	}
 
@@ -338,7 +399,7 @@ class KD_Bonus_Settings {
 		<tr>
 			<th scope="row"><?php esc_html_e( 'Membership Status Rules', 'kd-bonus' ); ?></th>
 			<td>
-				<p class="description"><?php esc_html_e( 'Add, edit, or delete as many statuses as needed. Rows are evaluated by required spend first, then by priority when multiple statuses share the same threshold. Higher priority numbers win ties. Reward percentage is applied to eligible product subtotal only.', 'kd-bonus' ); ?></p>
+				<p class="description"><?php esc_html_e( 'Add, edit, or delete as many statuses as needed. Rows are saved in ascending priority order, then renumbered starting from 1. Membership resolution still uses required spend first, then priority when thresholds match. Reward percentage is applied to eligible product subtotal only.', 'kd-bonus' ); ?></p>
 				<table class="widefat striped" id="kd-bonus-status-table">
 					<thead>
 						<tr>
@@ -506,15 +567,19 @@ class KD_Bonus_Settings {
 		usort(
 			$sanitized,
 			static function ( $left, $right ) {
-				$threshold_compare = $left['threshold'] <=> $right['threshold'];
+				$priority_compare = $left['priority'] <=> $right['priority'];
 
-				if ( 0 !== $threshold_compare ) {
-					return $threshold_compare;
+				if ( 0 !== $priority_compare ) {
+					return $priority_compare;
 				}
 
-				return $left['priority'] <=> $right['priority'];
+				return $left['threshold'] <=> $right['threshold'];
 			}
 		);
+
+		foreach ( $sanitized as $index => $row ) {
+			$sanitized[ $index ]['priority'] = $index + 1;
+		}
 
 		return array_values( $sanitized );
 	}

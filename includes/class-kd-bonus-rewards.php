@@ -11,6 +11,26 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class KD_Bonus_Rewards {
 	/**
+	 * Network option key for membership rebuild progress/state.
+	 */
+	const MEMBERSHIP_REBUILD_STATE_OPTION = 'kd_bonus_membership_rebuild_state';
+
+	/**
+	 * Action hook used to process one rebuild batch.
+	 */
+	const MEMBERSHIP_REBUILD_CRON_HOOK = 'kd_bonus_process_membership_rebuild_batch';
+
+	/**
+	 * Orders to process in one batch.
+	 */
+	const MEMBERSHIP_REBUILD_ORDER_BATCH = 100;
+
+	/**
+	 * Users to process in one batch.
+	 */
+	const MEMBERSHIP_REBUILD_USER_BATCH = 200;
+
+	/**
 	 * Lifetime spend meta key.
 	 */
 	const LIFETIME_SPEND_META = 'kd_bonus_lifetime_spend';
@@ -80,6 +100,8 @@ class KD_Bonus_Rewards {
 		add_action( 'edit_user_profile_update', array( $this, 'save_user_profile_rewards_section' ) );
 		add_action( 'user_profile_update_errors', array( $this, 'validate_user_profile_rewards_section' ), 10, 3 );
 		add_action( 'network_admin_menu', array( $this, 'register_event_log_submenu' ) );
+		add_action( 'kd_bonus_request_membership_rebuild', array( $this, 'start_membership_rebuild' ), 10, 1 );
+		add_action( self::MEMBERSHIP_REBUILD_CRON_HOOK, array( $this, 'process_membership_rebuild_batch' ) );
 
 		if ( ! class_exists( 'WooCommerce' ) ) {
 			return;
@@ -92,6 +114,115 @@ class KD_Bonus_Rewards {
 		add_action( 'woocommerce_order_status_changed', array( $this, 'handle_order_status_change' ), 20, 4 );
 		add_action( 'woocommerce_order_status_cancelled', array( $this, 'handle_order_reversal' ) );
 		add_action( 'woocommerce_order_status_refunded', array( $this, 'handle_order_reversal' ) );
+	}
+
+	/**
+	 * Read membership rebuild state from network options.
+	 *
+	 * @return array<string,mixed>
+	 */
+	public static function get_membership_rebuild_state() {
+		$state = get_network_option( null, self::MEMBERSHIP_REBUILD_STATE_OPTION, array() );
+
+		return is_array( $state ) ? $state : array();
+	}
+
+	/**
+	 * Start or resume membership rebuild from historical order spend.
+	 *
+	 * @param int $initiator_user_id Administrator user ID.
+	 */
+	public function start_membership_rebuild( $initiator_user_id = 0 ) {
+		$state = self::get_membership_rebuild_state();
+		if ( ! empty( $state['running'] ) ) {
+			return;
+		}
+
+		global $wpdb;
+
+		$site_ids = array_map( 'absint', get_sites( array( 'fields' => 'ids' ) ) );
+		if ( empty( $site_ids ) ) {
+			$site_ids = array( get_current_blog_id() );
+		}
+
+		$award_status = $this->get_award_order_status();
+		$total_orders = 0;
+		foreach ( $site_ids as $site_id ) {
+			switch_to_blog( $site_id );
+			$total_orders += (int) $wpdb->get_var(
+				$wpdb->prepare(
+					"SELECT COUNT(1)
+					FROM {$wpdb->posts} p
+					INNER JOIN {$wpdb->postmeta} pm
+						ON pm.post_id = p.ID
+						AND pm.meta_key = %s
+					WHERE p.post_type = %s
+						AND p.post_status = %s
+						AND CAST(pm.meta_value AS UNSIGNED) > 0",
+					'_customer_user',
+					'shop_order',
+					$award_status
+				)
+			);
+			restore_current_blog();
+		}
+
+		$state = array(
+			'running'                  => 1,
+			'status'                   => 'running',
+			'phase'                    => 'reset_users',
+			'message'                  => __( 'Resetting existing membership state before historical spend rebuild.', 'kd-bonus' ),
+			'initiator_user_id'        => absint( $initiator_user_id ),
+			'started_at'               => time(),
+			'updated_at'               => time(),
+			'finished_at'              => 0,
+			'total_users'              => (int) $wpdb->get_var( "SELECT COUNT(1) FROM {$wpdb->users}" ), // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+			'user_reset_last_id'       => 0,
+			'user_reset_processed'     => 0,
+			'status_rebuild_last_id'   => 0,
+			'status_rebuild_processed' => 0,
+			'site_ids'                 => $site_ids,
+			'site_index'               => 0,
+			'last_order_id'            => 0,
+			'award_status'             => $award_status,
+			'total_orders'             => $total_orders,
+			'processed_orders'         => 0,
+		);
+
+		$this->save_membership_rebuild_state( $state );
+		$this->schedule_membership_rebuild_batch();
+	}
+
+	/**
+	 * Process one batch of the membership rebuild pipeline.
+	 */
+	public function process_membership_rebuild_batch() {
+		$state = self::get_membership_rebuild_state();
+		if ( empty( $state['running'] ) ) {
+			return;
+		}
+
+		if ( ! class_exists( 'WooCommerce' ) ) {
+			$this->mark_membership_rebuild_failed( __( 'WooCommerce is required to rebuild memberships from historical spend.', 'kd-bonus' ), $state );
+			return;
+		}
+
+		$phase = isset( $state['phase'] ) ? (string) $state['phase'] : 'reset_users';
+
+		switch ( $phase ) {
+			case 'reset_users':
+				$this->process_membership_rebuild_user_reset_batch( $state );
+				break;
+			case 'scan_orders':
+				$this->process_membership_rebuild_order_batch( $state );
+				break;
+			case 'rebuild_statuses':
+				$this->process_membership_rebuild_status_batch( $state );
+				break;
+			default:
+				$this->mark_membership_rebuild_complete( $state );
+				break;
+		}
 	}
 
 	/**
@@ -264,10 +395,21 @@ class KD_Bonus_Rewards {
 			'name'           => __( 'Member', 'kd-bonus' ),
 			'threshold'      => 0,
 			'reward_percent' => 0,
+			'priority'       => 0,
 		);
 
 		foreach ( $this->get_membership_statuses() as $status ) {
-			if ( $lifetime_spend >= (float) $status['threshold'] ) {
+			$threshold = isset( $status['threshold'] ) ? (float) $status['threshold'] : 0.0;
+			$priority  = isset( $status['priority'] ) ? (int) $status['priority'] : 0;
+
+			if ( $lifetime_spend < $threshold ) {
+				continue;
+			}
+
+			$current_threshold = isset( $current['threshold'] ) ? (float) $current['threshold'] : 0.0;
+			$current_priority  = isset( $current['priority'] ) ? (int) $current['priority'] : 0;
+
+			if ( $threshold > $current_threshold || ( $threshold === $current_threshold && $priority >= $current_priority ) ) {
 				$current = $status;
 			}
 		}
@@ -1905,5 +2047,243 @@ class KD_Bonus_Rewards {
 		}
 
 		return (float) $raw;
+	}
+
+	/**
+	 * Persist membership rebuild state.
+	 *
+	 * @param array<string,mixed> $state State payload.
+	 */
+	private function save_membership_rebuild_state( $state ) {
+		$state['updated_at'] = time();
+		update_network_option( null, self::MEMBERSHIP_REBUILD_STATE_OPTION, $state );
+	}
+
+	/**
+	 * Schedule the next batch run.
+	 */
+	private function schedule_membership_rebuild_batch() {
+		if ( ! wp_next_scheduled( self::MEMBERSHIP_REBUILD_CRON_HOOK ) ) {
+			wp_schedule_single_event( time() + 1, self::MEMBERSHIP_REBUILD_CRON_HOOK );
+		}
+	}
+
+	/**
+	 * Process one user-reset batch.
+	 *
+	 * @param array<string,mixed> $state State payload.
+	 */
+	private function process_membership_rebuild_user_reset_batch( $state ) {
+		$user_ids = $this->get_user_ids_batch( (int) $state['user_reset_last_id'], self::MEMBERSHIP_REBUILD_USER_BATCH );
+		if ( empty( $user_ids ) ) {
+			$state['phase']         = 'scan_orders';
+			$state['message']       = __( 'Scanning WooCommerce orders to rebuild lifetime spend.', 'kd-bonus' );
+			$state['site_index']    = 0;
+			$state['last_order_id'] = 0;
+			$this->save_membership_rebuild_state( $state );
+			$this->schedule_membership_rebuild_batch();
+			return;
+		}
+
+		foreach ( $user_ids as $user_id ) {
+			$this->upsert_user_meta_value( $user_id, self::LIFETIME_SPEND_META, $this->format_decimal( 0, 4 ) );
+			delete_user_meta( $user_id, self::STATUS_META );
+		}
+
+		$state['user_reset_last_id']    = (int) end( $user_ids );
+		$state['user_reset_processed'] += count( $user_ids );
+		$this->save_membership_rebuild_state( $state );
+		$this->schedule_membership_rebuild_batch();
+	}
+
+	/**
+	 * Process one order-scanning batch.
+	 *
+	 * @param array<string,mixed> $state State payload.
+	 */
+	private function process_membership_rebuild_order_batch( $state ) {
+		$site_ids   = isset( $state['site_ids'] ) && is_array( $state['site_ids'] ) ? array_values( array_map( 'absint', $state['site_ids'] ) ) : array();
+		$site_index = (int) ( $state['site_index'] ?? 0 );
+
+		if ( empty( $site_ids ) || $site_index >= count( $site_ids ) ) {
+			$state['phase']                  = 'rebuild_statuses';
+			$state['message']                = __( 'Updating membership statuses from rebuilt lifetime spend.', 'kd-bonus' );
+			$state['status_rebuild_last_id'] = 0;
+			$this->save_membership_rebuild_state( $state );
+			$this->schedule_membership_rebuild_batch();
+			return;
+		}
+
+		$site_id = (int) $site_ids[ $site_index ];
+		$award_status = isset( $state['award_status'] ) ? sanitize_key( (string) $state['award_status'] ) : $this->get_award_order_status();
+		switch_to_blog( $site_id );
+		$order_rows = $this->get_order_rows_batch( (int) ( $state['last_order_id'] ?? 0 ), self::MEMBERSHIP_REBUILD_ORDER_BATCH, $award_status );
+		restore_current_blog();
+
+		if ( empty( $order_rows ) ) {
+			$state['site_index']    = $site_index + 1;
+			$state['last_order_id'] = 0;
+			$this->save_membership_rebuild_state( $state );
+			$this->schedule_membership_rebuild_batch();
+			return;
+		}
+
+		$spend_deltas = array();
+		$last_order_id = 0;
+
+		switch_to_blog( $site_id );
+		foreach ( $order_rows as $order_row ) {
+			$order_id = (int) $order_row['order_id'];
+			$user_id  = (int) $order_row['user_id'];
+			$last_order_id = max( $last_order_id, $order_id );
+
+			if ( $order_id <= 0 || $user_id <= 0 ) {
+				continue;
+			}
+
+			$order = wc_get_order( $order_id );
+			if ( ! $order instanceof WC_Order ) {
+				continue;
+			}
+
+			$eligible_subtotal = $this->get_order_eligible_subtotal( $order );
+			if ( $eligible_subtotal <= 0 ) {
+				continue;
+			}
+
+			if ( ! isset( $spend_deltas[ $user_id ] ) ) {
+				$spend_deltas[ $user_id ] = 0.0;
+			}
+			$spend_deltas[ $user_id ] += (float) $eligible_subtotal;
+		}
+		restore_current_blog();
+
+		foreach ( $spend_deltas as $user_id => $delta ) {
+			$this->adjust_lifetime_spend( (int) $user_id, (float) $delta );
+		}
+
+		$state['last_order_id']    = $last_order_id;
+		$state['processed_orders'] = (int) $state['processed_orders'] + count( $order_rows );
+		$this->save_membership_rebuild_state( $state );
+		$this->schedule_membership_rebuild_batch();
+	}
+
+	/**
+	 * Process one status rebuild batch.
+	 *
+	 * @param array<string,mixed> $state State payload.
+	 */
+	private function process_membership_rebuild_status_batch( $state ) {
+		$user_ids = $this->get_user_ids_batch( (int) $state['status_rebuild_last_id'], self::MEMBERSHIP_REBUILD_USER_BATCH );
+		if ( empty( $user_ids ) ) {
+			$this->mark_membership_rebuild_complete( $state );
+			return;
+		}
+
+		foreach ( $user_ids as $user_id ) {
+			$lifetime_spend = $this->get_lifetime_spend( $user_id );
+			$status         = $this->get_status_for_spend( $lifetime_spend );
+
+			if ( $lifetime_spend > 0 && ! empty( $status['name'] ) ) {
+				$this->upsert_user_meta_value( $user_id, self::STATUS_META, sanitize_text_field( (string) $status['name'] ) );
+			} else {
+				delete_user_meta( $user_id, self::STATUS_META );
+			}
+		}
+
+		$state['status_rebuild_last_id']  = (int) end( $user_ids );
+		$state['status_rebuild_processed'] = (int) $state['status_rebuild_processed'] + count( $user_ids );
+		$this->save_membership_rebuild_state( $state );
+		$this->schedule_membership_rebuild_batch();
+	}
+
+	/**
+	 * Mark rebuild as completed.
+	 *
+	 * @param array<string,mixed> $state State payload.
+	 */
+	private function mark_membership_rebuild_complete( $state ) {
+		$state['running']     = 0;
+		$state['status']      = 'completed';
+		$state['phase']       = 'completed';
+		$state['finished_at'] = time();
+		$state['message']     = __( 'Membership rebuild completed successfully.', 'kd-bonus' );
+		$this->save_membership_rebuild_state( $state );
+	}
+
+	/**
+	 * Mark rebuild as failed.
+	 *
+	 * @param string              $message Failure message.
+	 * @param array<string,mixed> $state Existing state.
+	 */
+	private function mark_membership_rebuild_failed( $message, $state ) {
+		$state['running']     = 0;
+		$state['status']      = 'failed';
+		$state['phase']       = 'failed';
+		$state['finished_at'] = time();
+		$state['message']     = (string) $message;
+		$this->save_membership_rebuild_state( $state );
+	}
+
+	/**
+	 * Get a user ID batch after the given user ID.
+	 *
+	 * @param int $after_user_id Last processed user ID.
+	 * @param int $limit Batch size.
+	 * @return array<int,int>
+	 */
+	private function get_user_ids_batch( $after_user_id, $limit ) {
+		global $wpdb;
+
+		$rows = $wpdb->get_col(
+			$wpdb->prepare(
+				"SELECT ID
+				FROM {$wpdb->users}
+				WHERE ID > %d
+				ORDER BY ID ASC
+				LIMIT %d",
+				max( 0, (int) $after_user_id ),
+				max( 1, (int) $limit )
+			)
+		); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+
+		return array_map( 'absint', is_array( $rows ) ? $rows : array() );
+	}
+
+	/**
+	 * Get one batch of matching WooCommerce orders with customer IDs.
+	 *
+	 * @param int    $after_order_id Last processed order ID.
+	 * @param int    $limit Batch size.
+	 * @param string $award_status Trigger order status (with wc- prefix).
+	 * @return array<int,array<string,int>>
+	 */
+	private function get_order_rows_batch( $after_order_id, $limit, $award_status ) {
+		global $wpdb;
+
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT p.ID AS order_id, pm.meta_value AS user_id
+				FROM {$wpdb->posts} p
+				INNER JOIN {$wpdb->postmeta} pm
+					ON pm.post_id = p.ID
+					AND pm.meta_key = %s
+				WHERE p.post_type = %s
+					AND p.post_status = %s
+					AND p.ID > %d
+					AND CAST(pm.meta_value AS UNSIGNED) > 0
+				ORDER BY p.ID ASC
+				LIMIT %d",
+				'_customer_user',
+				'shop_order',
+				sanitize_key( $award_status ),
+				max( 0, (int) $after_order_id ),
+				max( 1, (int) $limit )
+			),
+			ARRAY_A
+		); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+
+		return is_array( $rows ) ? $rows : array();
 	}
 }
