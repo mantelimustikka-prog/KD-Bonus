@@ -683,6 +683,7 @@ class KD_Bonus_Rewards {
 		$effective_status = $this->get_user_status( $user->ID );
 		$computed_status  = $this->get_status_for_spend( $lifetime_spend );
 		$override_status  = $this->get_manual_status_override( $user->ID );
+		$override_status  = ! empty( $this->get_status_by_name( $override_status ) ) ? $override_status : '';
 		$history          = $this->get_transaction_history( $user->ID, 12 );
 		$expiry           = $this->get_user_expiry_data( $user->ID );
 		$metadata         = $this->get_bonus_metadata( $user->ID );
@@ -797,7 +798,7 @@ class KD_Bonus_Rewards {
 						<th><label for="kd_bonus_membership_status"><?php esc_html_e( 'Membership Status Override', 'kd-bonus' ); ?></label></th>
 						<td>
 							<select name="kd_bonus_membership_status" id="kd_bonus_membership_status">
-								<option value="__automatic__" <?php selected( '', $override_status ); ?>><?php esc_html_e( 'Automatic (use lifetime spend)', 'kd-bonus' ); ?></option>
+								<option value="__automatic__" <?php selected( $override_status, '' ); ?>><?php esc_html_e( 'Automatic (use lifetime spend)', 'kd-bonus' ); ?></option>
 								<?php foreach ( $this->get_membership_statuses() as $status ) : ?>
 									<option value="<?php echo esc_attr( $status['name'] ); ?>" <?php selected( $override_status, $status['name'] ); ?>><?php echo esc_html( $status['name'] ); ?></option>
 								<?php endforeach; ?>
@@ -1493,7 +1494,17 @@ class KD_Bonus_Rewards {
 			wp_die( esc_html__( 'You do not have permission to view the KD Bonus reward event log.', 'kd-bonus' ) );
 		}
 
-		$events = $this->get_reward_event_log( 200 );
+		$events      = $this->get_reward_event_log( 200 );
+		$event_users = array();
+
+		if ( ! empty( $events ) ) {
+			$user_ids = array_values( array_unique( array_map( 'absint', wp_list_pluck( $events, 'user_id' ) ) ) );
+			foreach ( get_users( array( 'include' => $user_ids ) ) as $event_user ) {
+				if ( $event_user instanceof WP_User ) {
+					$event_users[ $event_user->ID ] = $event_user;
+				}
+			}
+		}
 		?>
 		<div class="wrap">
 			<h1><?php esc_html_e( 'KD Bonus Reward Event Log', 'kd-bonus' ); ?></h1>
@@ -1517,7 +1528,7 @@ class KD_Bonus_Rewards {
 						</tr>
 					<?php else : ?>
 						<?php foreach ( $events as $event ) : ?>
-							<?php $event_user = get_userdata( (int) $event->user_id ); ?>
+							<?php $event_user = $event_users[ (int) $event->user_id ] ?? null; ?>
 							<tr>
 								<td><?php echo esc_html( wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), strtotime( $event->created_at . ' UTC' ) ) ); ?></td>
 								<td>
