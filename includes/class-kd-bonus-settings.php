@@ -75,6 +75,7 @@ class KD_Bonus_Settings {
 			'dashboard_page_slug'        => 'kd-bonus-dashboard',
 			'auto_create_dashboard_page' => 1,
 			'checkout_redemption'        => 1,
+			'award_order_status'         => 'wc-processing',
 			'reward_name'                => 'Kamagra Dollar',
 			'reward_symbol'              => '$KD',
 			'base_currency'              => '',
@@ -85,16 +86,19 @@ class KD_Bonus_Settings {
 			'reward_email_body'          => "Hi {customer_name},\n\nYou earned {reward_amount} {reward_symbol} from order #{order_number}. Your new balance is {balance_amount}.\n",
 			'membership_statuses'        => array(
 				array(
+					'priority'       => 10,
 					'name'           => 'Bronze',
 					'threshold'      => 0,
 					'reward_percent' => 1,
 				),
 				array(
+					'priority'       => 20,
 					'name'           => 'Silver',
 					'threshold'      => 500,
 					'reward_percent' => 2.5,
 				),
 				array(
+					'priority'       => 30,
 					'name'           => 'Gold',
 					'threshold'      => 1500,
 					'reward_percent' => 5,
@@ -185,6 +189,7 @@ class KD_Bonus_Settings {
 				$settings['dashboard_page_slug']        = $settings['dashboard_page_slug'] ? $settings['dashboard_page_slug'] : 'kd-bonus-dashboard';
 				$settings['auto_create_dashboard_page'] = ! empty( $_POST['auto_create_dashboard_page'] ) ? 1 : 0;
 				$settings['checkout_redemption']        = ! empty( $_POST['checkout_redemption'] ) ? 1 : 0;
+				$settings['award_order_status']         = $this->sanitize_award_order_status( wp_unslash( $_POST['award_order_status'] ?? '' ) );
 				break;
 		}
 
@@ -253,6 +258,17 @@ class KD_Bonus_Settings {
 			<th scope="row"><?php esc_html_e( 'Checkout Redemption', 'kd-bonus' ); ?></th>
 			<td><label><input name="checkout_redemption" type="checkbox" value="1" <?php checked( ! empty( $settings['checkout_redemption'] ) ); ?> /> <?php esc_html_e( 'Allow customers to apply part or all of their available balance during WooCommerce checkout.', 'kd-bonus' ); ?></label></td>
 		</tr>
+		<tr>
+			<th scope="row"><label for="award_order_status"><?php esc_html_e( 'Reward Awarding Status', 'kd-bonus' ); ?></label></th>
+			<td>
+				<select name="award_order_status" id="award_order_status">
+					<?php foreach ( $this->get_available_order_statuses() as $status_key => $status_label ) : ?>
+						<option value="<?php echo esc_attr( $status_key ); ?>" <?php selected( $settings['award_order_status'], $status_key ); ?>><?php echo esc_html( $status_label ); ?></option>
+					<?php endforeach; ?>
+				</select>
+				<p class="description"><?php esc_html_e( 'Reward points are awarded automatically when an order reaches the selected WooCommerce status.', 'kd-bonus' ); ?></p>
+			</td>
+		</tr>
 		<?php
 	}
 
@@ -267,48 +283,71 @@ class KD_Bonus_Settings {
 		<tr>
 			<th scope="row"><?php esc_html_e( 'Membership Status Rules', 'kd-bonus' ); ?></th>
 			<td>
-				<p class="description"><?php esc_html_e( 'Statuses are sorted by lifetime eligible spend. Reward percentage is applied to eligible product subtotal only.', 'kd-bonus' ); ?></p>
+				<p class="description"><?php esc_html_e( 'Add, edit, or delete as many statuses as needed. Rows are evaluated by required spend first, then by priority when multiple statuses share the same threshold. Higher priority numbers win ties. Reward percentage is applied to eligible product subtotal only.', 'kd-bonus' ); ?></p>
 				<table class="widefat striped" id="kd-bonus-status-table">
 					<thead>
 						<tr>
+							<th><?php esc_html_e( 'Priority (Higher Wins)', 'kd-bonus' ); ?></th>
 							<th><?php esc_html_e( 'Status Name', 'kd-bonus' ); ?></th>
-							<th><?php esc_html_e( 'Lifetime Spend Threshold', 'kd-bonus' ); ?></th>
+							<th><?php esc_html_e( 'Required Product Spend', 'kd-bonus' ); ?></th>
 							<th><?php esc_html_e( 'Reward Percentage', 'kd-bonus' ); ?></th>
+							<th><?php esc_html_e( 'Actions', 'kd-bonus' ); ?></th>
 						</tr>
 					</thead>
 					<tbody>
 						<?php foreach ( $rows as $index => $row ) : ?>
-							<tr>
-								<td><input type="text" class="regular-text" name="membership_statuses[<?php echo esc_attr( $index ); ?>][name]" value="<?php echo esc_attr( $row['name'] ?? '' ); ?>" /></td>
-								<td><input type="number" step="0.01" min="0" name="membership_statuses[<?php echo esc_attr( $index ); ?>][threshold]" value="<?php echo esc_attr( $row['threshold'] ?? 0 ); ?>" /></td>
-								<td><input type="number" step="0.01" min="0" name="membership_statuses[<?php echo esc_attr( $index ); ?>][reward_percent]" value="<?php echo esc_attr( $row['reward_percent'] ?? 0 ); ?>" /></td>
-							</tr>
+							<?php $this->render_membership_status_row( $index, $row ); ?>
 						<?php endforeach; ?>
-						<tr>
-							<td><input type="text" class="regular-text" name="membership_statuses[new][name]" value="" /></td>
-							<td><input type="number" step="0.01" min="0" name="membership_statuses[new][threshold]" value="" /></td>
-							<td><input type="number" step="0.01" min="0" name="membership_statuses[new][reward_percent]" value="" /></td>
-						</tr>
 					</tbody>
 				</table>
-				<p><button type="button" class="button" id="kd-bonus-add-status"><?php esc_html_e( 'Add Status Row', 'kd-bonus' ); ?></button></p>
+				<template id="kd-bonus-status-row-template">
+					<?php $this->render_membership_status_row( '__INDEX__', array() ); ?>
+				</template>
+				<p><button type="button" class="button" id="kd-bonus-add-status"><?php esc_html_e( 'Add Membership Status', 'kd-bonus' ); ?></button></p>
 				<script>
 					(function () {
 						const table = document.getElementById('kd-bonus-status-table');
 						const button = document.getElementById('kd-bonus-add-status');
-						if (!table || !button) {
+						const template = document.getElementById('kd-bonus-status-row-template');
+						if (!table || !button || !template) {
 							return;
 						}
+						const tbody = table.querySelector('tbody');
+						let nextIndex = tbody ? tbody.querySelectorAll('tr').length : 0;
 						button.addEventListener('click', function () {
-							const tbody = table.querySelector('tbody');
-							const index = tbody.querySelectorAll('tr').length;
-							const row = document.createElement('tr');
-							row.innerHTML = '<td><input type="text" class="regular-text" name="membership_statuses[' + index + '][name]" value="" /></td><td><input type="number" step="0.01" min="0" name="membership_statuses[' + index + '][threshold]" value="" /></td><td><input type="number" step="0.01" min="0" name="membership_statuses[' + index + '][reward_percent]" value="" /></td>';
-							tbody.appendChild(row);
+							tbody.insertAdjacentHTML('beforeend', template.innerHTML.replace(/__INDEX__/g, String(nextIndex)));
+							nextIndex += 1;
+						});
+						table.addEventListener('click', function (event) {
+							if (!event.target.classList.contains('kd-bonus-remove-status')) {
+								return;
+							}
+							const row = event.target.closest('tr');
+							if (row) {
+								row.remove();
+							}
 						});
 					}());
 				</script>
 			</td>
+		</tr>
+		<?php
+	}
+
+	/**
+	 * Render one membership status row.
+	 *
+	 * @param int|string          $index Row index.
+	 * @param array<string,mixed> $row Row data.
+	 */
+	private function render_membership_status_row( $index, $row ) {
+		?>
+		<tr>
+			<td><input type="number" step="1" min="0" name="membership_statuses[<?php echo esc_attr( $index ); ?>][priority]" value="<?php echo esc_attr( $row['priority'] ?? 0 ); ?>" /></td>
+			<td><input type="text" class="regular-text" name="membership_statuses[<?php echo esc_attr( $index ); ?>][name]" value="<?php echo esc_attr( $row['name'] ?? '' ); ?>" /></td>
+			<td><input type="number" step="0.01" min="0" name="membership_statuses[<?php echo esc_attr( $index ); ?>][threshold]" value="<?php echo esc_attr( $row['threshold'] ?? 0 ); ?>" /></td>
+			<td><input type="number" step="0.01" min="0" name="membership_statuses[<?php echo esc_attr( $index ); ?>][reward_percent]" value="<?php echo esc_attr( $row['reward_percent'] ?? 0 ); ?>" /></td>
+			<td><button type="button" class="button-link-delete kd-bonus-remove-status"><?php esc_html_e( 'Delete', 'kd-bonus' ); ?></button></td>
 		</tr>
 		<?php
 	}
@@ -398,6 +437,7 @@ class KD_Bonus_Settings {
 			}
 
 			$sanitized[] = array(
+				'priority'       => max( 0, (int) ( $row['priority'] ?? 0 ) ),
 				'name'           => $name,
 				'threshold'      => max( 0, (float) ( $row['threshold'] ?? 0 ) ),
 				'reward_percent' => max( 0, (float) ( $row['reward_percent'] ?? 0 ) ),
@@ -411,10 +451,52 @@ class KD_Bonus_Settings {
 		usort(
 			$sanitized,
 			static function ( $left, $right ) {
-				return $left['threshold'] <=> $right['threshold'];
+				$threshold_compare = $left['threshold'] <=> $right['threshold'];
+
+				if ( 0 !== $threshold_compare ) {
+					return $threshold_compare;
+				}
+
+				return $left['priority'] <=> $right['priority'];
 			}
 		);
 
 		return array_values( $sanitized );
+	}
+
+	/**
+	 * Get available order statuses for the General Settings dropdown.
+	 *
+	 * @return array<string,string>
+	 */
+	private function get_available_order_statuses() {
+		if ( function_exists( 'wc_get_order_statuses' ) ) {
+			$statuses = wc_get_order_statuses();
+			if ( ! empty( $statuses ) && is_array( $statuses ) ) {
+				return $statuses;
+			}
+		}
+
+		return array(
+			'wc-processing' => __( 'Processing', 'kd-bonus' ),
+			'wc-completed'  => __( 'Completed', 'kd-bonus' ),
+		);
+	}
+
+	/**
+	 * Sanitize the selected awarding status.
+	 *
+	 * @param string $status Raw status key.
+	 * @return string
+	 */
+	private function sanitize_award_order_status( $status ) {
+		$status = sanitize_key( $status );
+		if ( '' === $status ) {
+			return 'wc-processing';
+		}
+
+		$statuses = $this->get_available_order_statuses();
+
+		return isset( $statuses[ $status ] ) ? $status : 'wc-processing';
 	}
 }

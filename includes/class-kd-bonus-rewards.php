@@ -54,8 +54,7 @@ class KD_Bonus_Rewards {
 		add_action( 'woocommerce_before_checkout_form', array( $this, 'render_checkout_redemption_ui' ) );
 		add_action( 'woocommerce_cart_calculate_fees', array( $this, 'apply_checkout_redemption' ) );
 		add_action( 'woocommerce_checkout_create_order', array( $this, 'store_checkout_redemption_on_order' ), 20, 2 );
-		add_action( 'woocommerce_order_status_processing', array( $this, 'handle_order_completion' ) );
-		add_action( 'woocommerce_order_status_completed', array( $this, 'handle_order_completion' ) );
+		add_action( 'woocommerce_order_status_changed', array( $this, 'handle_order_status_change' ), 20, 4 );
 		add_action( 'woocommerce_order_status_cancelled', array( $this, 'handle_order_reversal' ) );
 		add_action( 'woocommerce_order_status_refunded', array( $this, 'handle_order_reversal' ) );
 	}
@@ -138,6 +137,18 @@ class KD_Bonus_Rewards {
 	 */
 	public function get_reward_settings() {
 		return KD_Bonus_Settings::get_settings();
+	}
+
+	/**
+	 * Get the configured WooCommerce order status that triggers reward awarding.
+	 *
+	 * @return string
+	 */
+	public function get_award_order_status() {
+		$settings = $this->get_reward_settings();
+		$status   = isset( $settings['award_order_status'] ) ? sanitize_key( $settings['award_order_status'] ) : '';
+
+		return $status ? $status : 'wc-processing';
 	}
 
 	/**
@@ -411,6 +422,22 @@ class KD_Bonus_Rewards {
 		}
 
 		$cart->add_fee( __( 'KD Bonus Credit', 'kd-bonus' ), -1 * $applied_amount, false );
+	}
+
+	/**
+	 * Award rewards only when an order reaches the configured trigger status.
+	 *
+	 * @param int            $order_id Order ID.
+	 * @param string         $from Previous status slug without wc- prefix.
+	 * @param string         $to New status slug without wc- prefix.
+	 * @param WC_Order|mixed $order Order object when available.
+	 */
+	public function handle_order_status_change( $order_id, $from, $to, $order ) {
+		if ( 'wc-' . sanitize_key( $to ) !== $this->get_award_order_status() ) {
+			return;
+		}
+
+		$this->handle_order_completion( $order_id );
 	}
 
 	/**
