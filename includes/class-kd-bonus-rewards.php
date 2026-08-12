@@ -1118,9 +1118,9 @@ class KD_Bonus_Rewards {
 						</td>
 					</tr>
 					<tr>
-						<th><?php esc_html_e( 'Save R & B Table', 'kd-bonus' ); ?></th>
+						<th><?php esc_html_e( 'Save KD Rewards & Bonuses', 'kd-bonus' ); ?></th>
 						<td>
-							<button type="button" class="button button-primary" id="kd_bonus_save_rb_table" data-user-id="<?php echo esc_attr( $user->ID ); ?>"><?php esc_html_e( 'Save R & B Table', 'kd-bonus' ); ?></button>
+							<button type="button" class="button button-primary" id="kd_bonus_save_rb_table" data-user-id="<?php echo esc_attr( $user->ID ); ?>"><?php esc_html_e( 'Save KD Rewards & Bonuses', 'kd-bonus' ); ?></button>
 							<span id="kd_bonus_save_rb_status" style="margin-left:8px;"></span>
 						</td>
 					</tr>
@@ -1150,7 +1150,7 @@ class KD_Bonus_Rewards {
 											<td><?php echo esc_html( $this->format_reward_amount( (float) $entry->amount ) ); ?></td>
 											<td><?php echo esc_html( $this->format_reward_amount( (float) $entry->balance_after ) ); ?></td>
 											<td>
-												<?php if ( ! empty( $entry->order_id ) && 'earn' === $entry->type ) : ?>
+												<?php if ( ! empty( $entry->order_id ) && in_array( (string) $entry->type, array( 'earn', 'order_earn' ), true ) ) : ?>
 													<a href="<?php echo esc_url( get_admin_url( (int) $entry->site_id, 'post.php?post=' . (int) $entry->order_id . '&action=edit' ) ); ?>">#<?php echo esc_html( (string) absint( $entry->order_id ) ); ?></a>
 												<?php elseif ( ! empty( $entry->order_id ) ) : ?>
 													<?php echo esc_html( '#' . absint( $entry->order_id ) ); ?>
@@ -2207,7 +2207,7 @@ class KD_Bonus_Rewards {
 		wp_mail(
 			$to,
 			wp_strip_all_tags( $subject ),
-			wp_kses_post( wpautop( $body ) ),
+			(string) $body,
 			array( 'Content-Type: text/html; charset=UTF-8' )
 		);
 	}
