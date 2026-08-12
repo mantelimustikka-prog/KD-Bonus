@@ -372,7 +372,7 @@ class KD_Bonus_Settings {
 						<?php
 						echo esc_html(
 							sprintf(
-								/* translators: 1: rebuild phase, 2: reset users count, 3: total users, 4: processed orders, 5: total orders, 6: status rebuilt users, 7: total users. */
+								/* translators: 1: rebuild phase, 2: reset users label (e.g. "skipped" or "N/M"), 3: processed orders, 4: total orders, 5: status rebuilt users, 6: total users. */
 								__( 'Phase: %1$s | Reset users: %2$s | Orders scanned: %3$d/%4$d | Statuses rebuilt: %5$d/%6$d', 'kd-bonus' ),
 								$rebuild_phase,
 								! empty( $rebuild_state['reset_skipped'] ) ? __( 'skipped', 'kd-bonus' ) : sprintf( '%d/%d', $reset_users, $total_users ),
