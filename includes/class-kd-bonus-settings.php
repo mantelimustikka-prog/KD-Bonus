@@ -813,7 +813,7 @@ class KD_Bonus_Settings {
 									<?php
 									echo esc_html(
 										$user
-										? sprintf( '%1$s (#%2$d)', $user->user_login, (int) $event->user_id )
+										? sprintf( '%1$s (%2$s)', $user->user_login, $user->user_email )
 										: sprintf( __( 'User #%d', 'kd-bonus' ), (int) $event->user_id )
 									);
 									?>
