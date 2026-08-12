@@ -271,8 +271,13 @@ class KD_Bonus_Rewards {
 		}
 
 		$lifetime_spend = $this->get_lifetime_spend( $user_id );
+		$computed       = $this->get_status_for_spend( $lifetime_spend );
 
-		return $this->get_status_for_spend( $lifetime_spend );
+		if ( '' !== $stored_status ) {
+			update_user_meta( $user_id, self::STATUS_META, sanitize_text_field( $computed['name'] ) );
+		}
+
+		return $computed;
 	}
 
 	/**
@@ -1248,25 +1253,19 @@ class KD_Bonus_Rewards {
 		global $wpdb;
 
 		$table_name = self::get_table_name();
-		$cutoff_id  = (int) $wpdb->get_var(
-			$wpdb->prepare(
-				"SELECT id
-				FROM {$table_name}
-				ORDER BY id DESC
-				LIMIT 1 OFFSET %d",
-				self::EVENT_LOG_LIMIT
-			)
-		);
+		$total_rows = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table_name}" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		$overflow   = $total_rows - self::EVENT_LOG_LIMIT;
 
-		if ( $cutoff_id <= 0 ) {
+		if ( $overflow <= 0 ) {
 			return;
 		}
 
 		$wpdb->query(
 			$wpdb->prepare(
 				"DELETE FROM {$table_name}
-				WHERE id <= %d",
-				$cutoff_id
+				ORDER BY id ASC
+				LIMIT %d",
+				$overflow
 			)
 		);
 	}
@@ -1303,7 +1302,7 @@ class KD_Bonus_Rewards {
 			return false;
 		}
 
-		if ( current_user_can( 'manage_network_options' ) || current_user_can( 'manage_options' ) || current_user_can( 'promote_users' ) ) {
+		if ( current_user_can( 'manage_network_options' ) || current_user_can( 'manage_options' ) ) {
 			return true;
 		}
 
@@ -1623,7 +1622,18 @@ class KD_Bonus_Rewards {
 			return (float) wc_format_decimal( $value );
 		}
 
-		return (float) preg_replace( '/[^0-9\.\-]/', '', (string) $value );
+		$normalized = str_replace( ',', '.', trim( (string) $value ) );
+		$filtered   = filter_var( $normalized, FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION | FILTER_FLAG_ALLOW_SCIENTIFIC );
+
+		if ( ! is_string( $filtered ) || '' === $filtered ) {
+			return 0.0;
+		}
+
+		if ( ! preg_match( '/^-?(?:\d+|\d*\.\d+)(?:[eE][+-]?\d+)?$/', $filtered ) ) {
+			return 0.0;
+		}
+
+		return (float) $filtered;
 	}
 
 	/**

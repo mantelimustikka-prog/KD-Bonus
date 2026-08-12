@@ -100,7 +100,7 @@ class KD_Bonus_Dashboard {
 			</div>
 
 			<h3 style="margin-top:24px;"><?php esc_html_e( 'Reward Event Log', 'kd-bonus' ); ?></h3>
-			<p><?php esc_html_e( 'Showing your latest reward events from the global 5000-event log.', 'kd-bonus' ); ?></p>
+			<p><?php esc_html_e( 'Showing your latest 25 reward events.', 'kd-bonus' ); ?></p>
 			<?php if ( empty( $history ) ) : ?>
 				<p><?php esc_html_e( 'No reward activity yet.', 'kd-bonus' ); ?></p>
 			<?php else : ?>
