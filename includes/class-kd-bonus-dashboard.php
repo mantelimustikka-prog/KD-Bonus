@@ -97,7 +97,7 @@ class KD_Bonus_Dashboard {
 	 * Render the customer dashboard on the My Account endpoint.
 	 */
 	public function render_my_account_endpoint() {
-		echo wp_kses_post( $this->render_shortcode() );
+		echo $this->render_shortcode(); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 	}
 
 	/**
@@ -127,25 +127,13 @@ class KD_Bonus_Dashboard {
 		$reward_name       = $settings['reward_name'] ?: __( 'Reward Balance', 'kd-bonus' );
 		$reward_symbol     = $settings['reward_symbol'] ?: '$KD';
 
-		// Prepare sorted membership tier list for the progress bar.
+		// Use configured membership tier order for progress path rendering.
 		$all_statuses = $this->rewards->get_membership_statuses();
-		usort(
-			$all_statuses,
-			static function ( $a, $b ) {
-				$threshold_compare = (float) ( $a['threshold'] ?? 0 ) <=> (float) ( $b['threshold'] ?? 0 );
-				if ( 0 !== $threshold_compare ) {
-					return $threshold_compare;
-				}
-				return (int) ( $a['priority'] ?? 0 ) <=> (int) ( $b['priority'] ?? 0 );
-			}
-		);
 		$current_status_name = isset( $status['name'] ) ? (string) $status['name'] : '';
 
 		ob_start();
 		?>
 		<div class="kd-bonus-dashboard">
-			<h2><?php esc_html_e( 'KD Bonus Dashboard', 'kd-bonus' ); ?></h2>
-
 			<?php if ( ! empty( $all_statuses ) ) : ?>
 			<div class="kd-bonus-tier-progress" style="margin-bottom:24px;">
 				<style>
@@ -207,6 +195,8 @@ class KD_Bonus_Dashboard {
 				</div>
 			</div>
 			<?php endif; ?>
+
+			<h2><?php esc_html_e( 'KD Bonus Dashboard', 'kd-bonus' ); ?></h2>
 
 			<div class="kd-bonus-dashboard__summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;">
 				<div class="kd-bonus-dashboard__card" style="padding:16px;border:1px solid #dcdcde;border-radius:8px;">
