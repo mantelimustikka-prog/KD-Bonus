@@ -62,6 +62,14 @@ class KD_Bonus_Rewards {
 	 * Register WooCommerce hooks.
 	 */
 	public function register() {
+		add_filter( 'wpmu_users_columns', array( $this, 'add_network_users_bonus_status_column' ) );
+		add_filter( 'manage_users-network_custom_column', array( $this, 'render_network_users_bonus_status_column' ), 10, 3 );
+		add_filter( 'manage_users_custom_column', array( $this, 'render_network_users_bonus_status_column' ), 10, 3 );
+
+		if ( ! class_exists( 'WooCommerce' ) ) {
+			return;
+		}
+
 		add_action( 'template_redirect', array( $this, 'handle_checkout_redemption_request' ) );
 		add_action( 'woocommerce_before_checkout_form', array( $this, 'render_checkout_redemption_ui' ) );
 		add_action( 'woocommerce_cart_calculate_fees', array( $this, 'apply_checkout_redemption' ) );
@@ -69,6 +77,34 @@ class KD_Bonus_Rewards {
 		add_action( 'woocommerce_order_status_changed', array( $this, 'handle_order_status_change' ), 20, 4 );
 		add_action( 'woocommerce_order_status_cancelled', array( $this, 'handle_order_reversal' ) );
 		add_action( 'woocommerce_order_status_refunded', array( $this, 'handle_order_reversal' ) );
+	}
+
+	/**
+	 * Add the bonus status column to the Network Admin users table.
+	 *
+	 * @param array<string,string> $columns Users table columns.
+	 * @return array<string,string>
+	 */
+	public function add_network_users_bonus_status_column( $columns ) {
+		$columns['kd_bonus_status'] = __( 'Bonus Status', 'kd-bonus' );
+
+		return $columns;
+	}
+
+	/**
+	 * Render the bonus status column for Network Admin users.
+	 *
+	 * @param string $output      Existing column output.
+	 * @param string $column_name Column key.
+	 * @param int    $user_id     User ID.
+	 * @return string
+	 */
+	public function render_network_users_bonus_status_column( $output, $column_name, $user_id ) {
+		if ( 'kd_bonus_status' !== $column_name || ! is_network_admin() ) {
+			return $output;
+		}
+
+		return $this->get_network_user_bonus_status_label( $user_id );
 	}
 
 	/**
@@ -223,6 +259,47 @@ class KD_Bonus_Rewards {
 	}
 
 	/**
+	 * Get the network users table label for a user's bonus status.
+	 *
+	 * @param int $user_id User ID.
+	 * @return string
+	 */
+	public function get_network_user_bonus_status_label( $user_id ) {
+		$user_id = absint( $user_id );
+		if ( $user_id <= 0 ) {
+			return sprintf(
+				/* translators: 1: membership status label, 2: reward points with symbol. */
+				__( '%1$s (%2$s)', 'kd-bonus' ),
+				__( 'No status', 'kd-bonus' ),
+				$this->format_network_reward_amount( 0 )
+			);
+		}
+
+		$balance         = $this->get_balance( $user_id );
+		$lifetime_spend  = $this->get_lifetime_spend( $user_id );
+		$stored_status   = trim( (string) get_user_meta( $user_id, self::STATUS_META, true ) );
+		$computed_status = $this->get_user_status( $user_id );
+		$status_name     = '';
+
+		if ( $lifetime_spend > 0 && ! empty( $computed_status['name'] ) ) {
+			$status_name = (string) $computed_status['name'];
+		} elseif ( '' !== $stored_status ) {
+			$status_name = $stored_status;
+		}
+
+		if ( '' === $status_name ) {
+			$status_name = __( 'No status', 'kd-bonus' );
+		}
+
+		return sprintf(
+			/* translators: 1: membership status label, 2: reward points with symbol. */
+			__( '%1$s (%2$s)', 'kd-bonus' ),
+			$status_name,
+			$this->format_network_reward_amount( $balance )
+		);
+	}
+
+	/**
 	 * Format reward amount with symbol.
 	 *
 	 * @param float $amount Amount in base reward currency.
@@ -234,6 +311,22 @@ class KD_Bonus_Rewards {
 		$decimals = function_exists( 'wc_get_price_decimals' ) ? wc_get_price_decimals() : 2;
 
 		return sprintf( '%1$s %2$s', $symbol, number_format_i18n( (float) $amount, $decimals ) );
+	}
+
+	/**
+	 * Format reward amount for the Network Admin users column.
+	 *
+	 * @param float $amount Amount in base reward currency.
+	 * @return string
+	 */
+	private function format_network_reward_amount( $amount ) {
+		$settings = $this->get_reward_settings();
+		$symbol   = $settings['reward_symbol'] ?: '$KD';
+		$decimals = function_exists( 'wc_get_price_decimals' ) ? wc_get_price_decimals() : 2;
+		$amount   = (float) $amount;
+		$scale    = floor( $amount ) === $amount ? 0 : $decimals;
+
+		return sprintf( '%1$s %2$s', number_format_i18n( $amount, $scale ), $symbol );
 	}
 
 	/**
