@@ -16,6 +16,16 @@ class KD_Bonus_Settings {
 	const OPTION_KEY = 'kd_bonus_network_settings';
 
 	/**
+	 * Network admin menu slug.
+	 */
+	const MENU_SLUG = 'kd-bonus';
+
+	/**
+	 * Network admin settings submenu slug.
+	 */
+	const SETTINGS_SUBMENU_SLUG = 'kd-bonus-settings';
+
+	/**
 	 * Register settings hooks.
 	 */
 	public function register() {
@@ -28,17 +38,35 @@ class KD_Bonus_Settings {
 	}
 
 	/**
-	 * Add submenu under Network Settings.
+	 * Add menu and settings submenu in Network Admin.
 	 */
 	public function register_menu() {
-		add_submenu_page(
-			'settings.php',
+		add_menu_page(
 			__( 'KD Bonus', 'kd-bonus' ),
 			__( 'KD Bonus', 'kd-bonus' ),
 			'manage_network_options',
-			'kd-bonus',
+			self::MENU_SLUG,
+			array( $this, 'render_menu_landing' ),
+			'dashicons-awards',
+			60
+		);
+
+		add_submenu_page(
+			self::MENU_SLUG,
+			__( 'Settings', 'kd-bonus' ),
+			__( 'Settings', 'kd-bonus' ),
+			'manage_network_options',
+			self::SETTINGS_SUBMENU_SLUG,
 			array( $this, 'render_page' )
 		);
+	}
+
+	/**
+	 * Redirect top-level menu requests to the Settings submenu page.
+	 */
+	public function render_menu_landing() {
+		wp_safe_redirect( network_admin_url( 'admin.php?page=' . self::SETTINGS_SUBMENU_SLUG ) );
+		exit;
 	}
 
 	/**
@@ -133,7 +161,7 @@ class KD_Bonus_Settings {
 			<h1><?php esc_html_e( 'KD Bonus Network Settings', 'kd-bonus' ); ?></h1>
 			<nav class="nav-tab-wrapper">
 				<?php foreach ( $tabs as $tab_key => $label ) : ?>
-					<a class="nav-tab <?php echo esc_attr( $tab_key === $tab ? 'nav-tab-active' : '' ); ?>" href="<?php echo esc_url( network_admin_url( 'settings.php?page=kd-bonus&tab=' . $tab_key ) ); ?>">
+					<a class="nav-tab <?php echo esc_attr( $tab_key === $tab ? 'nav-tab-active' : '' ); ?>" href="<?php echo esc_url( network_admin_url( 'admin.php?page=' . self::SETTINGS_SUBMENU_SLUG . '&tab=' . $tab_key ) ); ?>">
 						<?php echo esc_html( $label ); ?>
 					</a>
 				<?php endforeach; ?>
@@ -204,11 +232,11 @@ class KD_Bonus_Settings {
 		wp_safe_redirect(
 			add_query_arg(
 				array(
-					'page'    => 'kd-bonus',
+					'page'    => self::SETTINGS_SUBMENU_SLUG,
 					'tab'     => $tab,
 					'updated' => 1,
 				),
-				network_admin_url( 'settings.php' )
+				network_admin_url( 'admin.php' )
 			)
 		);
 		exit;
