@@ -81,6 +81,11 @@ class KD_Bonus_Rewards {
 	const SESSION_REDEMPTION_KEY = 'kd_bonus_redemption_base';
 
 	/**
+	 * User meta key marking that the one-time new-account reward has been applied.
+	 */
+	const NEW_ACCOUNT_REWARD_AWARDED_META = 'kd_bonus_new_account_reward_awarded';
+
+	/**
 	 * Settings handler.
 	 *
 	 * @var KD_Bonus_Settings
@@ -109,16 +114,18 @@ class KD_Bonus_Rewards {
 	public function register() {
 		add_filter( 'wpmu_users_columns', array( $this, 'add_network_users_bonus_status_column' ) );
 		add_filter( 'manage_users-network_custom_column', array( $this, 'render_network_users_bonus_status_column' ), 10, 3 );
-		add_action( 'show_user_profile', array( $this, 'render_user_profile_rewards_section' ) );
-		add_action( 'edit_user_profile', array( $this, 'render_user_profile_rewards_section' ) );
+		add_action( 'show_user_profile', array( $this, 'render_user_profile_rewards_section' ), 1 );
+		add_action( 'edit_user_profile', array( $this, 'render_user_profile_rewards_section' ), 1 );
 		add_action( 'personal_options_update', array( $this, 'save_user_profile_rewards_section' ) );
 		add_action( 'edit_user_profile_update', array( $this, 'save_user_profile_rewards_section' ) );
 		add_action( 'user_profile_update_errors', array( $this, 'validate_user_profile_rewards_section' ), 10, 3 );
+		add_action( 'wp_ajax_kd_bonus_save_profile_rewards_section', array( $this, 'ajax_save_user_profile_rewards_section' ) );
 		add_action( 'network_admin_menu', array( $this, 'register_event_log_submenu' ) );
 		add_action( 'kd_bonus_request_membership_rebuild', array( $this, 'start_membership_rebuild' ), 10, 2 );
 		add_action( 'kd_bonus_continue_membership_rebuild', array( $this, 'continue_membership_rebuild' ) );
 		add_action( 'kd_bonus_revoke_membership_rebuild', array( $this, 'revoke_membership_rebuild' ) );
 		add_action( 'wp_ajax_kd_bonus_membership_rebuild_progress', array( $this, 'ajax_membership_rebuild_progress' ) );
+		add_action( 'user_register', array( $this, 'handle_new_user_reward' ) );
 
 		if ( ! class_exists( 'WooCommerce' ) ) {
 			return;
@@ -845,9 +852,97 @@ class KD_Bonus_Rewards {
 		}
 
 		$note            = trim( sanitize_textarea_field( wp_unslash( $_POST['kd_bonus_adjustment_note'] ?? '' ) ) );
+		$status_choice    = sanitize_text_field( wp_unslash( $_POST['kd_bonus_membership_status'] ?? '' ) );
+		$amount           = $this->sanitize_decimal_input( wp_unslash( $_POST['kd_bonus_adjustment_amount'] ?? '' ) );
+		$action           = sanitize_key( wp_unslash( $_POST['kd_bonus_adjustment_action'] ?? '' ) );
+
+		$this->process_user_profile_rewards_section_update( $user_id, $note, $status_choice, $amount, $action );
+	}
+
+	/**
+	 * Save reward section values from AJAX without a full profile-page submit.
+	 */
+	public function ajax_save_user_profile_rewards_section() {
+		$user_id = absint( wp_unslash( $_POST['user_id'] ?? 0 ) );
+		if ( $user_id <= 0 ) {
+			wp_send_json_error(
+				array(
+					'message' => __( 'Missing user context.', 'kd-bonus' ),
+				),
+				400
+			);
+		}
+
+		if ( ! $this->can_manage_user_bonus( $user_id ) ) {
+			wp_send_json_error(
+				array(
+					'message' => __( 'You do not have permission to manage KD Bonus rewards for this user.', 'kd-bonus' ),
+				),
+				403
+			);
+		}
+
+		if ( ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['kd_bonus_profile_rewards_nonce'] ?? '' ) ), 'kd_bonus_profile_rewards_' . $user_id ) ) {
+			wp_send_json_error(
+				array(
+					'message' => __( 'The KD Bonus profile update could not be verified.', 'kd-bonus' ),
+				),
+				403
+			);
+		}
+
+		$amount = $this->sanitize_decimal_input( wp_unslash( $_POST['kd_bonus_adjustment_amount'] ?? '' ) );
+		$action = sanitize_key( wp_unslash( $_POST['kd_bonus_adjustment_action'] ?? '' ) );
+		$note   = trim( sanitize_textarea_field( wp_unslash( $_POST['kd_bonus_adjustment_note'] ?? '' ) ) );
+		if ( $amount > 0 && ! in_array( $action, array( 'add', 'deduct' ), true ) ) {
+			wp_send_json_error(
+				array(
+					'message' => __( 'Choose whether to add or deduct KD Bonus rewards.', 'kd-bonus' ),
+				),
+				400
+			);
+		}
+
+		if ( $amount > 0 && '' === $note ) {
+			wp_send_json_error(
+				array(
+					'message' => __( 'A note or remark is required for every manual KD Bonus adjustment.', 'kd-bonus' ),
+				),
+				400
+			);
+		}
+
+		$status_choice = sanitize_text_field( wp_unslash( $_POST['kd_bonus_membership_status'] ?? '' ) );
+		if ( '' !== $status_choice && '__automatic__' !== $status_choice && empty( $this->get_status_by_name( $status_choice ) ) ) {
+			wp_send_json_error(
+				array(
+					'message' => __( 'The selected KD Bonus membership status is not valid.', 'kd-bonus' ),
+				),
+				400
+			);
+		}
+
+		$this->process_user_profile_rewards_section_update( $user_id, $note, $status_choice, $amount, $action );
+
+		wp_send_json_success(
+			array(
+				'message' => __( 'KD Rewards and Bonuses table saved.', 'kd-bonus' ),
+			)
+		);
+	}
+
+	/**
+	 * Process and persist profile reward section values.
+	 *
+	 * @param int    $user_id User ID.
+	 * @param string $note Adjustment note.
+	 * @param string $status_choice Membership override choice.
+	 * @param float  $amount Adjustment amount.
+	 * @param string $action Adjustment action.
+	 */
+	private function process_user_profile_rewards_section_update( $user_id, $note, $status_choice, $amount, $action ) {
 		$effective_before = $this->get_user_status( $user_id );
 		$effective_after  = $effective_before;
-		$status_choice    = sanitize_text_field( wp_unslash( $_POST['kd_bonus_membership_status'] ?? '' ) );
 
 		if ( '__automatic__' === $status_choice ) {
 			delete_user_meta( $user_id, self::STATUS_OVERRIDE_META );
@@ -875,9 +970,6 @@ class KD_Bonus_Rewards {
 				)
 			);
 		}
-
-		$amount = $this->sanitize_decimal_input( wp_unslash( $_POST['kd_bonus_adjustment_amount'] ?? '' ) );
-		$action = sanitize_key( wp_unslash( $_POST['kd_bonus_adjustment_action'] ?? '' ) );
 
 		if ( $amount > 0 && in_array( $action, array( 'add', 'deduct' ), true ) && '' !== $note ) {
 			$this->apply_manual_adjustment( $user_id, $action, $amount, $note );
@@ -907,6 +999,7 @@ class KD_Bonus_Rewards {
 		$can_manage       = $this->can_manage_user_bonus( $user->ID );
 		$computed_rate    = $this->format_decimal( (float) ( $computed_status['reward_percent'] ?? 0 ), 2 );
 		?>
+		<div id="kd-bonus-profile-section">
 		<h2><?php esc_html_e( 'KD Rewards and Bonuses', 'kd-bonus' ); ?></h2>
 		<table class="form-table" role="presentation" style="background:#fff8c5;border:1px solid #dcdcde;border-radius:8px;padding:12px 16px;">
 			<tbody>
@@ -1024,6 +1117,13 @@ class KD_Bonus_Rewards {
 							<p class="description"><?php esc_html_e( 'Choose a manual override or leave the user on automatic membership progression.', 'kd-bonus' ); ?></p>
 						</td>
 					</tr>
+					<tr>
+						<th><?php esc_html_e( 'Save R & B Table', 'kd-bonus' ); ?></th>
+						<td>
+							<button type="button" class="button button-primary" id="kd_bonus_save_rb_table" data-user-id="<?php echo esc_attr( $user->ID ); ?>"><?php esc_html_e( 'Save R & B Table', 'kd-bonus' ); ?></button>
+							<span id="kd_bonus_save_rb_status" style="margin-left:8px;"></span>
+						</td>
+					</tr>
 					<?php endif; ?>
 				<tr>
 					<th><?php esc_html_e( 'Recent Reward Events', 'kd-bonus' ); ?></th>
@@ -1038,6 +1138,7 @@ class KD_Bonus_Rewards {
 										<th><?php esc_html_e( 'Type', 'kd-bonus' ); ?></th>
 										<th><?php esc_html_e( 'Amount', 'kd-bonus' ); ?></th>
 										<th><?php esc_html_e( 'Balance After', 'kd-bonus' ); ?></th>
+										<th><?php esc_html_e( 'Order', 'kd-bonus' ); ?></th>
 										<th><?php esc_html_e( 'Details', 'kd-bonus' ); ?></th>
 									</tr>
 								</thead>
@@ -1048,6 +1149,15 @@ class KD_Bonus_Rewards {
 											<td><?php echo esc_html( ucwords( str_replace( '_', ' ', $entry->type ) ) ); ?></td>
 											<td><?php echo esc_html( $this->format_reward_amount( (float) $entry->amount ) ); ?></td>
 											<td><?php echo esc_html( $this->format_reward_amount( (float) $entry->balance_after ) ); ?></td>
+											<td>
+												<?php if ( ! empty( $entry->order_id ) && 'earn' === $entry->type ) : ?>
+													<a href="<?php echo esc_url( get_admin_url( (int) $entry->site_id, 'post.php?post=' . (int) $entry->order_id . '&action=edit' ) ); ?>">#<?php echo esc_html( (string) absint( $entry->order_id ) ); ?></a>
+												<?php elseif ( ! empty( $entry->order_id ) ) : ?>
+													<?php echo esc_html( '#' . absint( $entry->order_id ) ); ?>
+												<?php else : ?>
+													&mdash;
+												<?php endif; ?>
+											</td>
 											<td><?php echo esc_html( $entry->description ); ?></td>
 										</tr>
 									<?php endforeach; ?>
@@ -1058,6 +1168,72 @@ class KD_Bonus_Rewards {
 				</tr>
 			</tbody>
 		</table>
+		</div>
+		<script>
+			(function () {
+				function initKDBonusProfileSection() {
+					const section = document.getElementById('kd-bonus-profile-section');
+					const profileForm = document.getElementById('your-profile');
+					if (section && profileForm && profileForm.firstChild) {
+						profileForm.insertBefore(section, profileForm.firstChild);
+					}
+
+					const saveButton = document.getElementById('kd_bonus_save_rb_table');
+					const statusNode = document.getElementById('kd_bonus_save_rb_status');
+					if (!saveButton || !profileForm || typeof ajaxurl === 'undefined') {
+						return;
+					}
+
+					saveButton.addEventListener('click', function () {
+						const formData = new FormData(profileForm);
+						formData.append('action', 'kd_bonus_save_profile_rewards_section');
+						formData.append('user_id', saveButton.getAttribute('data-user-id') || '');
+
+						saveButton.disabled = true;
+						if (statusNode) {
+							statusNode.style.color = '#50575e';
+							statusNode.textContent = '<?php echo esc_js( __( 'Saving…', 'kd-bonus' ) ); ?>';
+						}
+
+						fetch(ajaxurl, {
+							method: 'POST',
+							credentials: 'same-origin',
+							body: formData
+						})
+							.then(function (response) {
+								return response.json();
+							})
+							.then(function (payload) {
+								if (payload && payload.success) {
+									if (statusNode) {
+										statusNode.style.color = '#008a20';
+										statusNode.textContent = (payload.data && payload.data.message) ? payload.data.message : '<?php echo esc_js( __( 'Saved.', 'kd-bonus' ) ); ?>';
+									}
+									return;
+								}
+
+								const message = payload && payload.data && payload.data.message ? payload.data.message : '<?php echo esc_js( __( 'Could not save the table.', 'kd-bonus' ) ); ?>';
+								throw new Error(message);
+							})
+							.catch(function (error) {
+								if (statusNode) {
+									statusNode.style.color = '#d63638';
+									statusNode.textContent = error && error.message ? error.message : '<?php echo esc_js( __( 'Could not save the table.', 'kd-bonus' ) ); ?>';
+								}
+							})
+							.finally(function () {
+								saveButton.disabled = false;
+							});
+					});
+				}
+
+				if (document.readyState === 'loading') {
+					document.addEventListener('DOMContentLoaded', initKDBonusProfileSection);
+				} else {
+					initKDBonusProfileSection();
+				}
+			})();
+		</script>
 		<?php
 	}
 
@@ -1411,6 +1587,52 @@ class KD_Bonus_Rewards {
 
 		$order->update_meta_data( '_kd_bonus_reversed', 1 );
 		$order->save();
+	}
+
+	/**
+	 * Award configured one-time rewards when a user account is created.
+	 *
+	 * @param int $user_id User ID.
+	 */
+	public function handle_new_user_reward( $user_id ) {
+		$user_id = absint( $user_id );
+		if ( $user_id <= 0 ) {
+			return;
+		}
+
+		$settings = $this->get_reward_settings();
+		if ( empty( $settings['reward_new_user'] ) ) {
+			return;
+		}
+
+		$reward_amount = $this->sanitize_decimal_input( $settings['new_user_reward_amount'] ?? 0 );
+		if ( $reward_amount <= 0 ) {
+			return;
+		}
+
+		if ( ! add_user_meta( $user_id, self::NEW_ACCOUNT_REWARD_AWARDED_META, 1, true ) ) {
+			return;
+		}
+
+		$previous_balance = $this->get_balance( $user_id );
+		$new_balance      = $this->adjust_balance(
+			$user_id,
+			$reward_amount,
+			'new_account_reward',
+			array(
+				'site_id'              => get_current_blog_id(),
+				'currency'             => $this->get_base_currency(),
+				'description'          => __( 'New account Reward', 'kd-bonus' ),
+				'touch_last_earned_at' => true,
+			)
+		);
+
+		if ( $new_balance <= $previous_balance ) {
+			delete_user_meta( $user_id, self::NEW_ACCOUNT_REWARD_AWARDED_META );
+			return;
+		}
+
+		$this->maybe_send_new_account_reward_email( $user_id, $reward_amount, $new_balance );
 	}
 
 	/**
@@ -1905,7 +2127,7 @@ class KD_Bonus_Rewards {
 			'{balance_amount}' => $this->format_reward_amount( $balance ),
 		);
 
-		wp_mail(
+		$this->send_reward_email(
 			$user->user_email,
 			strtr( $settings['reward_email_subject'], $replacements ),
 			strtr( $settings['reward_email_body'], $replacements )
@@ -1935,10 +2157,58 @@ class KD_Bonus_Rewards {
 			'{status_name}'   => $status['name'],
 		);
 
-		wp_mail(
+		$this->send_reward_email(
 			$user->user_email,
 			strtr( $settings['upgrade_email_subject'], $replacements ),
 			strtr( $settings['upgrade_email_body'], $replacements )
+		);
+	}
+
+	/**
+	 * Maybe send a new-account reward issuance email.
+	 *
+	 * @param int   $user_id User ID.
+	 * @param float $reward_amount Reward amount.
+	 * @param float $balance Balance after reward grant.
+	 */
+	private function maybe_send_new_account_reward_email( $user_id, $reward_amount, $balance ) {
+		$settings = $this->get_reward_settings();
+		if ( empty( $settings['email_notifications'] ) ) {
+			return;
+		}
+
+		$user = get_userdata( $user_id );
+		if ( ! $user || empty( $user->user_email ) ) {
+			return;
+		}
+
+		$replacements = array(
+			'{customer_name}' => $user->display_name ?: $user->user_login,
+			'{reward_amount}' => $this->format_reward_amount( $reward_amount ),
+			'{reward_symbol}' => $settings['reward_symbol'],
+			'{balance_amount}' => $this->format_reward_amount( $balance ),
+		);
+
+		$this->send_reward_email(
+			$user->user_email,
+			strtr( $settings['new_user_reward_email_subject'], $replacements ),
+			strtr( $settings['new_user_reward_email_body'], $replacements )
+		);
+	}
+
+	/**
+	 * Send a reward email using HTML content generated from stored templates.
+	 *
+	 * @param string $to Recipient email.
+	 * @param string $subject Subject line.
+	 * @param string $body Email body template output.
+	 */
+	private function send_reward_email( $to, $subject, $body ) {
+		wp_mail(
+			$to,
+			wp_strip_all_tags( $subject ),
+			wp_kses_post( wpautop( $body ) ),
+			array( 'Content-Type: text/html; charset=UTF-8' )
 		);
 	}
 
