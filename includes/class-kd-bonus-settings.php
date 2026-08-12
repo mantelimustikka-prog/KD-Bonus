@@ -76,6 +76,7 @@ class KD_Bonus_Settings {
 			'auto_create_dashboard_page' => 1,
 			'checkout_redemption'        => 1,
 			'award_order_status'         => 'wc-processing',
+			'reward_expiry_days'         => 0,
 			'reward_name'                => 'Kamagra Dollar',
 			'reward_symbol'              => '$KD',
 			'base_currency'              => '',
@@ -190,6 +191,7 @@ class KD_Bonus_Settings {
 				$settings['auto_create_dashboard_page'] = ! empty( $_POST['auto_create_dashboard_page'] ) ? 1 : 0;
 				$settings['checkout_redemption']        = ! empty( $_POST['checkout_redemption'] ) ? 1 : 0;
 				$settings['award_order_status']         = $this->sanitize_award_order_status( wp_unslash( $_POST['award_order_status'] ?? '' ) );
+				$settings['reward_expiry_days']         = max( 0, absint( wp_unslash( $_POST['reward_expiry_days'] ?? 0 ) ) );
 				break;
 		}
 
@@ -267,6 +269,13 @@ class KD_Bonus_Settings {
 					<?php endforeach; ?>
 				</select>
 				<p class="description"><?php esc_html_e( 'Reward points are awarded automatically when an order reaches the selected WooCommerce status.', 'kd-bonus' ); ?></p>
+			</td>
+		</tr>
+		<tr>
+			<th scope="row"><label for="reward_expiry_days"><?php esc_html_e( 'Reward Expiry (Days)', 'kd-bonus' ); ?></label></th>
+			<td>
+				<input name="reward_expiry_days" id="reward_expiry_days" type="number" class="small-text" min="0" step="1" value="<?php echo esc_attr( (int) $settings['reward_expiry_days'] ); ?>" />
+				<p class="description"><?php esc_html_e( 'Set to 0 to disable expiry. Any unused KD Bonus balance expires this many days after the customer last received reward points.', 'kd-bonus' ); ?></p>
 			</td>
 		</tr>
 		<?php

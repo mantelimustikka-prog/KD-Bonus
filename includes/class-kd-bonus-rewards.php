@@ -26,6 +26,11 @@ class KD_Bonus_Rewards {
 	const STATUS_META = 'kd_bonus_membership_status';
 
 	/**
+	 * Last reward deposit timestamp meta key.
+	 */
+	const LAST_EARNED_AT_META = 'kd_bonus_last_earned_at';
+
+	/**
 	 * Session key for base redemption amount.
 	 */
 	const SESSION_REDEMPTION_KEY = 'kd_bonus_redemption_base';
@@ -107,6 +112,8 @@ class KD_Bonus_Rewards {
 	 * @return float
 	 */
 	public function get_balance( $user_id ) {
+		$this->maybe_expire_user_balance( $user_id );
+
 		return (float) get_user_meta( $user_id, self::BALANCE_META, true );
 	}
 
@@ -149,6 +156,17 @@ class KD_Bonus_Rewards {
 		$status   = isset( $settings['award_order_status'] ) ? sanitize_key( $settings['award_order_status'] ) : '';
 
 		return $status ? $status : 'wc-processing';
+	}
+
+	/**
+	 * Get the configured number of days before unused points expire.
+	 *
+	 * @return int
+	 */
+	public function get_reward_expiry_days() {
+		$settings = $this->get_reward_settings();
+
+		return max( 0, absint( $settings['reward_expiry_days'] ?? 0 ) );
 	}
 
 	/**
@@ -493,8 +511,14 @@ class KD_Bonus_Rewards {
 		$lifetime_after = $this->adjust_lifetime_spend( $user_id, $eligible_subtotal );
 
 		$status_after   = $this->get_status_for_spend( $lifetime_after );
-		$reward_percent = (float) $status_after['reward_percent'];
-		$earned_amount  = round( $eligible_subtotal * ( $reward_percent / 100 ), wc_get_price_decimals() );
+		$earned_amount  = 0.0;
+
+		if ( ! $this->order_has_coupon_discount( $order ) ) {
+			$reward_percent = (float) $status_after['reward_percent'];
+			$earned_amount  = round( $eligible_subtotal * ( $reward_percent / 100 ), wc_get_price_decimals() );
+		} else {
+			$order->update_meta_data( '_kd_bonus_coupon_excluded', 1 );
+		}
 
 		if ( $earned_amount > 0 ) {
 			$new_balance = $this->adjust_balance(
@@ -662,6 +686,10 @@ class KD_Bonus_Rewards {
 	private function adjust_balance( $user_id, $delta, $type, $context = array() ) {
 		$new_balance = $this->atomic_adjust_user_meta_decimal( $user_id, self::BALANCE_META, (float) $delta );
 
+		if ( 'earn' === $type && $delta > 0 ) {
+			update_user_meta( $user_id, self::LAST_EARNED_AT_META, (int) current_time( 'timestamp', true ) );
+		}
+
 		$this->insert_transaction(
 			array(
 				'user_id'       => $user_id,
@@ -747,8 +775,8 @@ class KD_Bonus_Rewards {
 				'site_id'       => (int) $row['site_id'],
 				'order_id'      => (int) $row['order_id'],
 				'type'          => sanitize_key( $row['type'] ),
-				'amount'        => wc_format_decimal( $row['amount'], 4 ),
-				'balance_after' => wc_format_decimal( $row['balance_after'], 4 ),
+				'amount'        => $this->format_decimal( $row['amount'], 4 ),
+				'balance_after' => $this->format_decimal( $row['balance_after'], 4 ),
 				'currency'      => sanitize_text_field( $row['currency'] ),
 				'description'   => sanitize_text_field( $row['description'] ),
 				'created_at'    => current_time( 'mysql', true ),
@@ -848,5 +876,121 @@ class KD_Bonus_Rewards {
 		$cap  = (float) $cart->get_subtotal() + (float) $cart->get_cart_contents_tax() + (float) $cart->get_shipping_total() + (float) $cart->get_shipping_tax();
 
 		return max( 0, $cap );
+	}
+
+	/**
+	 * Check whether the order used coupon-based discounts.
+	 *
+	 * @param WC_Order $order WooCommerce order.
+	 * @return bool
+	 */
+	private function order_has_coupon_discount( $order ) {
+		$coupon_codes = method_exists( $order, 'get_coupon_codes' ) ? $order->get_coupon_codes() : array();
+		if ( ! empty( $coupon_codes ) ) {
+			return true;
+		}
+
+		return ! empty( $order->get_items( 'coupon' ) );
+	}
+
+	/**
+	 * Expire a customer's unused balance when the configured threshold has passed.
+	 *
+	 * @param int $user_id User ID.
+	 */
+	private function maybe_expire_user_balance( $user_id ) {
+		$user_id = (int) $user_id;
+
+		if ( $user_id <= 0 ) {
+			return;
+		}
+
+		$expiry_days = $this->get_reward_expiry_days();
+		if ( $expiry_days <= 0 ) {
+			return;
+		}
+
+		$balance = (float) get_user_meta( $user_id, self::BALANCE_META, true );
+		if ( $balance <= 0 ) {
+			return;
+		}
+
+		$last_earned_at = $this->get_last_earned_timestamp( $user_id );
+		if ( $last_earned_at <= 0 ) {
+			return;
+		}
+
+		$expiry_seconds = $expiry_days * DAY_IN_SECONDS;
+		if ( ( $last_earned_at + $expiry_seconds ) > (int) current_time( 'timestamp', true ) ) {
+			return;
+		}
+
+		$this->adjust_balance(
+			$user_id,
+			-1 * $balance,
+			'expire',
+			array(
+				'currency'    => $this->get_base_currency(),
+				'description' => __( 'Expired unused KD Bonus balance.', 'kd-bonus' ),
+			)
+		);
+	}
+
+	/**
+	 * Resolve the timestamp of the user's last reward deposit.
+	 *
+	 * @param int $user_id User ID.
+	 * @return int
+	 */
+	private function get_last_earned_timestamp( $user_id ) {
+		global $wpdb;
+
+		$timestamp = (int) get_user_meta( $user_id, self::LAST_EARNED_AT_META, true );
+		if ( $timestamp > 0 ) {
+			return $timestamp;
+		}
+
+		$table_name = self::get_table_name();
+		$created_at = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT created_at
+				FROM {$table_name}
+				WHERE user_id = %d
+					AND type = %s
+					AND amount > 0
+				ORDER BY id DESC
+				LIMIT 1",
+				$user_id,
+				'earn'
+			)
+		);
+
+		if ( empty( $created_at ) ) {
+			return 0;
+		}
+
+		$timestamp = strtotime( $created_at . ' UTC' );
+		if ( false === $timestamp ) {
+			return 0;
+		}
+
+		update_user_meta( $user_id, self::LAST_EARNED_AT_META, (int) $timestamp );
+
+		return (int) $timestamp;
+	}
+
+	/**
+	 * Format decimals without requiring WooCommerce helpers.
+	 *
+	 * @param float $value Value to format.
+	 * @param int   $decimals Number of decimals.
+	 * @return string
+	 */
+	private function format_decimal( $value, $decimals ) {
+		if ( function_exists( 'wc_format_decimal' ) ) {
+			return wc_format_decimal( $value, $decimals );
+		}
+
+		return number_format( (float) $value, (int) $decimals, '.', '' );
 	}
 }
