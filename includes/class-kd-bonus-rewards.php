@@ -1987,7 +1987,27 @@ class KD_Bonus_Rewards {
 								<td><?php echo esc_html( $this->format_reward_amount( (float) $event->amount ) ); ?></td>
 								<td><?php echo esc_html( $this->format_reward_amount( (float) $event->balance_after ) ); ?></td>
 								<td><?php echo esc_html( $event->order_id ? '#' . (int) $event->order_id : '—' ); ?></td>
-								<td><?php echo esc_html( $event->description ); ?></td>
+								<td>
+								<?php
+								if ( ! empty( $event->order_id ) ) {
+									$order_url = get_admin_url(
+										(int) $event->site_id,
+										'post.php?post=' . (int) $event->order_id . '&action=edit'
+									);
+									echo wp_kses(
+										sprintf(
+											'%s <a href="%s">#%d</a>',
+											esc_html( $event->description ),
+											esc_url( $order_url ),
+											(int) $event->order_id
+										),
+										array( 'a' => array( 'href' => array() ) )
+									);
+								} else {
+									echo esc_html( $event->description );
+								}
+								?>
+							</td>
 							</tr>
 						<?php endforeach; ?>
 					<?php endif; ?>
