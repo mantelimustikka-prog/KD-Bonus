@@ -26,9 +26,19 @@ class KD_Bonus_Rewards {
 	const STATUS_META = 'kd_bonus_membership_status';
 
 	/**
+	 * Manual membership override meta key.
+	 */
+	const STATUS_OVERRIDE_META = 'kd_bonus_membership_status_override';
+
+	/**
 	 * Last reward deposit timestamp meta key.
 	 */
 	const LAST_EARNED_AT_META = 'kd_bonus_last_earned_at';
+
+	/**
+	 * Maximum number of retained reward event rows.
+	 */
+	const MAX_EVENT_LOG_ROWS = 5000;
 
 	/**
 	 * Session key for base redemption amount.
@@ -64,6 +74,12 @@ class KD_Bonus_Rewards {
 	public function register() {
 		add_filter( 'wpmu_users_columns', array( $this, 'add_network_users_bonus_status_column' ) );
 		add_filter( 'manage_users-network_custom_column', array( $this, 'render_network_users_bonus_status_column' ), 10, 3 );
+		add_action( 'show_user_profile', array( $this, 'render_user_profile_rewards_section' ) );
+		add_action( 'edit_user_profile', array( $this, 'render_user_profile_rewards_section' ) );
+		add_action( 'personal_options_update', array( $this, 'save_user_profile_rewards_section' ) );
+		add_action( 'edit_user_profile_update', array( $this, 'save_user_profile_rewards_section' ) );
+		add_action( 'user_profile_update_errors', array( $this, 'validate_user_profile_rewards_section' ), 10, 3 );
+		add_action( 'network_admin_menu', array( $this, 'register_event_log_submenu' ) );
 
 		if ( ! class_exists( 'WooCommerce' ) ) {
 			return;
@@ -104,6 +120,20 @@ class KD_Bonus_Rewards {
 		}
 
 		return $this->get_network_user_bonus_status_label( $user_id );
+	}
+
+	/**
+	 * Register the network admin reward event log submenu.
+	 */
+	public function register_event_log_submenu() {
+		add_submenu_page(
+			KD_Bonus_Settings::MENU_SLUG,
+			__( 'Reward Event Log', 'kd-bonus' ),
+			__( 'Reward Event Log', 'kd-bonus' ),
+			'manage_network_options',
+			'kd-bonus-events',
+			array( $this, 'render_event_log_page' )
+		);
 	}
 
 	/**
@@ -252,9 +282,49 @@ class KD_Bonus_Rewards {
 	 * @return array<string,mixed>
 	 */
 	public function get_user_status( $user_id ) {
-		$lifetime_spend = $this->get_lifetime_spend( $user_id );
+		$override_status = $this->get_status_by_name( $this->get_manual_status_override( $user_id ) );
+		if ( ! empty( $override_status ) ) {
+			$override_status['is_manual'] = true;
 
-		return $this->get_status_for_spend( $lifetime_spend );
+			return $override_status;
+		}
+
+		$lifetime_spend = $this->get_lifetime_spend( $user_id );
+		$status         = $this->get_status_for_spend( $lifetime_spend );
+		$status['is_manual'] = false;
+
+		return $status;
+	}
+
+	/**
+	 * Get a user's stored manual membership override.
+	 *
+	 * @param int $user_id User ID.
+	 * @return string
+	 */
+	public function get_manual_status_override( $user_id ) {
+		return trim( (string) get_user_meta( $user_id, self::STATUS_OVERRIDE_META, true ) );
+	}
+
+	/**
+	 * Get a membership status definition by name.
+	 *
+	 * @param string $status_name Status name.
+	 * @return array<string,mixed>
+	 */
+	public function get_status_by_name( $status_name ) {
+		$status_name = trim( (string) $status_name );
+		if ( '' === $status_name ) {
+			return array();
+		}
+
+		foreach ( $this->get_membership_statuses() as $status ) {
+			if ( isset( $status['name'] ) && 0 === strcasecmp( (string) $status['name'], $status_name ) ) {
+				return $status;
+			}
+		}
+
+		return array();
 	}
 
 	/**
@@ -277,10 +347,13 @@ class KD_Bonus_Rewards {
 		$balance         = $this->get_balance( $user_id );
 		$lifetime_spend  = $this->get_lifetime_spend( $user_id );
 		$stored_status   = trim( (string) get_user_meta( $user_id, self::STATUS_META, true ) );
+		$manual_status   = $this->get_manual_status_override( $user_id );
 		$computed_status = $this->get_status_for_spend( $lifetime_spend );
 		$status_name     = '';
 
-		if ( $lifetime_spend > 0 ) {
+		if ( '' !== $manual_status ) {
+			$status_name = $manual_status;
+		} elseif ( $lifetime_spend > 0 ) {
 			$status_name = ! empty( $computed_status['name'] ) ? (string) $computed_status['name'] : '';
 		} elseif ( '' !== $stored_status ) {
 			$status_name = $stored_status;
@@ -396,20 +469,378 @@ class KD_Bonus_Rewards {
 	 * @return array<int,object>
 	 */
 	public function get_transaction_history( $user_id, $limit = 20 ) {
+		return $this->get_reward_event_log( $limit, $user_id );
+	}
+
+	/**
+	 * Read reward event log rows.
+	 *
+	 * @param int $limit Maximum number of rows.
+	 * @param int $user_id Optional user filter.
+	 * @return array<int,object>
+	 */
+	public function get_reward_event_log( $limit = 20, $user_id = 0 ) {
 		global $wpdb;
 
 		$table_name = self::get_table_name();
-		$query      = $wpdb->prepare(
-			"SELECT id, site_id, order_id, type, amount, balance_after, currency, description, created_at
-			FROM {$table_name}
-			WHERE user_id = %d
-			ORDER BY id DESC
-			LIMIT %d",
-			$user_id,
-			max( 1, (int) $limit )
-		);
+		$limit      = max( 1, (int) $limit );
+
+		if ( $user_id > 0 ) {
+			$query = $wpdb->prepare(
+				"SELECT id, user_id, site_id, order_id, type, amount, balance_after, currency, description, created_at
+				FROM {$table_name}
+				WHERE user_id = %d
+				ORDER BY id DESC
+				LIMIT %d",
+				$user_id,
+				$limit
+			);
+		} else {
+			$query = $wpdb->prepare(
+				"SELECT id, user_id, site_id, order_id, type, amount, balance_after, currency, description, created_at
+				FROM {$table_name}
+				ORDER BY id DESC
+				LIMIT %d",
+				$limit
+			);
+		}
 
 		return $wpdb->get_results( $query ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+	}
+
+	/**
+	 * Get expiry information for a user.
+	 *
+	 * @param int $user_id User ID.
+	 * @return array<string,int|bool>
+	 */
+	public function get_user_expiry_data( $user_id ) {
+		$expiry_days    = $this->get_reward_expiry_days();
+		$last_earned_at = $this->get_last_reward_deposit_timestamp( $user_id );
+		$expires_at     = 0;
+
+		if ( $expiry_days > 0 && $last_earned_at > 0 ) {
+			$expires_at = $last_earned_at + ( $expiry_days * DAY_IN_SECONDS );
+		}
+
+		return array(
+			'expiry_days'    => $expiry_days,
+			'last_earned_at' => $last_earned_at,
+			'expires_at'     => $expires_at,
+			'is_expired'     => $expires_at > 0 && $expires_at <= time(),
+		);
+	}
+
+	/**
+	 * Get the last reward deposit timestamp for a user.
+	 *
+	 * @param int $user_id User ID.
+	 * @return int
+	 */
+	public function get_last_reward_deposit_timestamp( $user_id ) {
+		return $this->get_last_earned_timestamp( $user_id );
+	}
+
+	/**
+	 * Get stored KD Bonus metadata for a user.
+	 *
+	 * @param int $user_id User ID.
+	 * @return array<string,mixed>
+	 */
+	public function get_bonus_metadata( $user_id ) {
+		$metadata = array();
+		$user_meta = get_user_meta( $user_id );
+
+		foreach ( $user_meta as $meta_key => $meta_values ) {
+			if ( 0 !== strpos( (string) $meta_key, 'kd_bonus_' ) ) {
+				continue;
+			}
+
+			if ( 1 === count( $meta_values ) ) {
+				$metadata[ $meta_key ] = maybe_unserialize( $meta_values[0] );
+			} else {
+				$metadata[ $meta_key ] = array_map( 'maybe_unserialize', $meta_values );
+			}
+		}
+
+		ksort( $metadata );
+
+		return $metadata;
+	}
+
+	/**
+	 * Validate profile reward section submissions.
+	 *
+	 * @param WP_Error $errors Validation errors.
+	 * @param bool     $update Whether this is a user update.
+	 * @param stdClass $user User object.
+	 */
+	public function validate_user_profile_rewards_section( $errors, $update, $user ) {
+		if ( ! $update || empty( $_POST['kd_bonus_profile_rewards_nonce'] ) ) {
+			return;
+		}
+
+		if ( ! $this->can_manage_user_bonus( $user->ID ) ) {
+			$errors->add( 'kd_bonus_permissions', __( 'You do not have permission to manage KD Bonus rewards for this user.', 'kd-bonus' ) );
+			return;
+		}
+
+		if ( ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['kd_bonus_profile_rewards_nonce'] ) ), 'kd_bonus_profile_rewards_' . $user->ID ) ) {
+			$errors->add( 'kd_bonus_nonce', __( 'The KD Bonus profile update could not be verified.', 'kd-bonus' ) );
+			return;
+		}
+
+		$amount = $this->sanitize_decimal_input( wp_unslash( $_POST['kd_bonus_adjustment_amount'] ?? '' ) );
+		$action = sanitize_key( wp_unslash( $_POST['kd_bonus_adjustment_action'] ?? '' ) );
+		$note   = trim( sanitize_textarea_field( wp_unslash( $_POST['kd_bonus_adjustment_note'] ?? '' ) ) );
+
+		if ( $amount > 0 && ! in_array( $action, array( 'add', 'deduct' ), true ) ) {
+			$errors->add( 'kd_bonus_adjustment_action', __( 'Choose whether to add or deduct KD Bonus rewards.', 'kd-bonus' ) );
+		}
+
+		if ( $amount > 0 && '' === $note ) {
+			$errors->add( 'kd_bonus_adjustment_note', __( 'A note or remark is required for every manual KD Bonus adjustment.', 'kd-bonus' ) );
+		}
+
+		$status_choice = sanitize_text_field( wp_unslash( $_POST['kd_bonus_membership_status'] ?? '' ) );
+		if ( '' !== $status_choice && '__automatic__' !== $status_choice && empty( $this->get_status_by_name( $status_choice ) ) ) {
+			$errors->add( 'kd_bonus_membership_status', __( 'The selected KD Bonus membership status is not valid.', 'kd-bonus' ) );
+		}
+	}
+
+	/**
+	 * Save profile reward section updates.
+	 *
+	 * @param int $user_id User ID.
+	 */
+	public function save_user_profile_rewards_section( $user_id ) {
+		$user_id = absint( $user_id );
+		if ( $user_id <= 0 || empty( $_POST['kd_bonus_profile_rewards_nonce'] ) ) {
+			return;
+		}
+
+		if ( ! $this->can_manage_user_bonus( $user_id ) ) {
+			return;
+		}
+
+		if ( ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['kd_bonus_profile_rewards_nonce'] ) ), 'kd_bonus_profile_rewards_' . $user_id ) ) {
+			return;
+		}
+
+		$note            = trim( sanitize_textarea_field( wp_unslash( $_POST['kd_bonus_adjustment_note'] ?? '' ) ) );
+		$effective_before = $this->get_user_status( $user_id );
+		$effective_after  = $effective_before;
+		$status_choice    = sanitize_text_field( wp_unslash( $_POST['kd_bonus_membership_status'] ?? '' ) );
+
+		if ( '__automatic__' === $status_choice ) {
+			delete_user_meta( $user_id, self::STATUS_OVERRIDE_META );
+		} elseif ( '' !== $status_choice && ! empty( $this->get_status_by_name( $status_choice ) ) ) {
+			update_user_meta( $user_id, self::STATUS_OVERRIDE_META, $status_choice );
+		}
+
+		$effective_after = $this->get_user_status( $user_id );
+		update_user_meta( $user_id, self::STATUS_META, sanitize_text_field( $effective_after['name'] ?? '' ) );
+
+		if ( ( $effective_before['name'] ?? '' ) !== ( $effective_after['name'] ?? '' ) ) {
+			$this->record_status_change_event(
+				$user_id,
+				$effective_before['name'] ?? '',
+				$effective_after['name'] ?? '',
+				sprintf(
+					/* translators: 1: previous membership status, 2: new membership status, 3: optional administrator note sentence. */
+					__( 'Administrator updated membership status from %1$s to %2$s.%3$s', 'kd-bonus' ),
+					$effective_before['name'] ?: __( 'No status', 'kd-bonus' ),
+					$effective_after['name'] ?: __( 'No status', 'kd-bonus' ),
+					'' !== $note ? ' ' . sprintf( __( 'Note: %s', 'kd-bonus' ), $note ) : ''
+				),
+				array(
+					'site_id' => get_current_blog_id(),
+				)
+			);
+		}
+
+		$amount = $this->sanitize_decimal_input( wp_unslash( $_POST['kd_bonus_adjustment_amount'] ?? '' ) );
+		$action = sanitize_key( wp_unslash( $_POST['kd_bonus_adjustment_action'] ?? '' ) );
+
+		if ( $amount > 0 && in_array( $action, array( 'add', 'deduct' ), true ) && '' !== $note ) {
+			$this->apply_manual_adjustment( $user_id, $action, $amount, $note );
+		}
+	}
+
+	/**
+	 * Render the user profile reward management section.
+	 *
+	 * @param WP_User $user User being edited.
+	 */
+	public function render_user_profile_rewards_section( $user ) {
+		if ( ! $user instanceof WP_User || ! current_user_can( 'edit_user', $user->ID ) ) {
+			return;
+		}
+
+		$balance          = $this->get_balance( $user->ID );
+		$available_balance = $this->get_available_balance( $user->ID );
+		$lifetime_spend   = $this->get_lifetime_spend( $user->ID );
+		$effective_status = $this->get_user_status( $user->ID );
+		$computed_status  = $this->get_status_for_spend( $lifetime_spend );
+		$override_status  = $this->get_manual_status_override( $user->ID );
+		$override_status  = ! empty( $this->get_status_by_name( $override_status ) ) ? $override_status : '';
+		$history          = $this->get_transaction_history( $user->ID, 12 );
+		$expiry           = $this->get_user_expiry_data( $user->ID );
+		$metadata         = $this->get_bonus_metadata( $user->ID );
+		$can_manage       = $this->can_manage_user_bonus( $user->ID );
+		$computed_rate    = $this->format_decimal( (float) ( $computed_status['reward_percent'] ?? 0 ), 2 );
+		?>
+		<h2><?php esc_html_e( 'KD Rewads and Bonuses', 'kd-bonus' ); ?></h2>
+		<table class="form-table" role="presentation" style="background:#fff8c5;border:1px solid #dcdcde;border-radius:8px;padding:12px 16px;">
+			<tbody>
+				<tr>
+					<th><?php esc_html_e( 'Current Balance', 'kd-bonus' ); ?></th>
+					<td><?php echo esc_html( $this->format_reward_amount( $balance ) ); ?></td>
+				</tr>
+				<tr>
+					<th><?php esc_html_e( 'Available Balance', 'kd-bonus' ); ?></th>
+					<td><?php echo esc_html( $this->format_reward_amount( $available_balance ) ); ?></td>
+				</tr>
+				<tr>
+					<th><?php esc_html_e( 'Membership Status', 'kd-bonus' ); ?></th>
+					<td>
+						<strong><?php echo esc_html( $effective_status['name'] ?? __( 'No status', 'kd-bonus' ) ); ?></strong>
+						<?php if ( ! empty( $effective_status['is_manual'] ) ) : ?>
+							<span class="description"><?php esc_html_e( 'Manual override', 'kd-bonus' ); ?></span>
+						<?php else : ?>
+							<span class="description"><?php esc_html_e( 'Automatic', 'kd-bonus' ); ?></span>
+						<?php endif; ?>
+						<br />
+						<span class="description">
+							<?php
+							echo esc_html(
+								sprintf(
+									/* translators: 1: computed status, 2: reward percent. */
+									__( 'Computed status: %1$s (%2$s reward rate)', 'kd-bonus' ),
+									$computed_status['name'] ?? __( 'No status', 'kd-bonus' ),
+									$computed_rate . '%'
+								)
+							);
+							?>
+						</span>
+					</td>
+				</tr>
+				<tr>
+					<th><?php esc_html_e( 'Last Reward Deposit', 'kd-bonus' ); ?></th>
+					<td>
+						<?php echo esc_html( $expiry['last_earned_at'] > 0 ? wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), (int) $expiry['last_earned_at'] ) : __( 'Never', 'kd-bonus' ) ); ?>
+					</td>
+				</tr>
+				<tr>
+					<th><?php esc_html_e( 'Reward Expiry', 'kd-bonus' ); ?></th>
+					<td>
+						<?php
+						if ( empty( $expiry['expiry_days'] ) ) {
+							esc_html_e( 'Disabled', 'kd-bonus' );
+						} elseif ( ! empty( $expiry['expires_at'] ) ) {
+							echo esc_html( wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), (int) $expiry['expires_at'] ) );
+							echo ! empty( $expiry['is_expired'] ) ? ' — ' . esc_html__( 'Expired', 'kd-bonus' ) : ' — ' . esc_html__( 'Scheduled', 'kd-bonus' );
+						} else {
+							esc_html_e( 'Waiting for first reward deposit', 'kd-bonus' );
+						}
+						?>
+					</td>
+				</tr>
+				<tr>
+					<th><?php esc_html_e( 'Lifetime Eligible Spend', 'kd-bonus' ); ?></th>
+					<td><?php echo esc_html( number_format_i18n( $lifetime_spend, 2 ) . ' ' . $this->get_base_currency() ); ?></td>
+				</tr>
+				<tr>
+					<th><?php esc_html_e( 'Stored Bonus Metadata', 'kd-bonus' ); ?></th>
+					<td>
+						<?php if ( empty( $metadata ) ) : ?>
+							<p><?php esc_html_e( 'No KD Bonus metadata stored for this user yet.', 'kd-bonus' ); ?></p>
+						<?php else : ?>
+							<table class="widefat striped" style="max-width:100%;">
+								<thead>
+									<tr>
+										<th><?php esc_html_e( 'Meta Key', 'kd-bonus' ); ?></th>
+										<th><?php esc_html_e( 'Value', 'kd-bonus' ); ?></th>
+									</tr>
+								</thead>
+								<tbody>
+									<?php foreach ( $metadata as $meta_key => $meta_value ) : ?>
+										<tr>
+											<td><code><?php echo esc_html( $meta_key ); ?></code></td>
+											<td><code><?php echo esc_html( is_scalar( $meta_value ) ? (string) $meta_value : wp_json_encode( $meta_value ) ); ?></code></td>
+										</tr>
+									<?php endforeach; ?>
+								</tbody>
+							</table>
+						<?php endif; ?>
+					</td>
+				</tr>
+				<?php if ( $can_manage ) : ?>
+					<tr>
+						<th><label for="kd_bonus_adjustment_action"><?php esc_html_e( 'Manual Reward Adjustment', 'kd-bonus' ); ?></label></th>
+						<td>
+							<?php wp_nonce_field( 'kd_bonus_profile_rewards_' . $user->ID, 'kd_bonus_profile_rewards_nonce' ); ?>
+							<select name="kd_bonus_adjustment_action" id="kd_bonus_adjustment_action">
+								<option value="add"><?php esc_html_e( 'Add rewards', 'kd-bonus' ); ?></option>
+								<option value="deduct"><?php esc_html_e( 'Deduct rewards', 'kd-bonus' ); ?></option>
+							</select>
+							<input type="number" min="0" step="0.01" class="small-text" name="kd_bonus_adjustment_amount" id="kd_bonus_adjustment_amount" value="" />
+							<p class="description"><?php esc_html_e( 'Enter a positive amount. A note/remark is required whenever rewards are added or deducted.', 'kd-bonus' ); ?></p>
+						</td>
+					</tr>
+					<tr>
+						<th><label for="kd_bonus_adjustment_note"><?php esc_html_e( 'Adjustment Note / Remark', 'kd-bonus' ); ?></label></th>
+						<td>
+							<textarea name="kd_bonus_adjustment_note" id="kd_bonus_adjustment_note" rows="3" class="large-text"></textarea>
+						</td>
+					</tr>
+					<tr>
+						<th><label for="kd_bonus_membership_status"><?php esc_html_e( 'Membership Status Override', 'kd-bonus' ); ?></label></th>
+						<td>
+							<select name="kd_bonus_membership_status" id="kd_bonus_membership_status">
+								<option value="__automatic__" <?php selected( $override_status, '' ); ?>><?php esc_html_e( 'Automatic (use lifetime spend)', 'kd-bonus' ); ?></option>
+								<?php foreach ( $this->get_membership_statuses() as $status ) : ?>
+									<option value="<?php echo esc_attr( $status['name'] ); ?>" <?php selected( $override_status, $status['name'] ); ?>><?php echo esc_html( $status['name'] ); ?></option>
+								<?php endforeach; ?>
+							</select>
+							<p class="description"><?php esc_html_e( 'Choose a manual override or leave the user on automatic membership progression.', 'kd-bonus' ); ?></p>
+						</td>
+					</tr>
+				<?php endif; ?>
+				<tr>
+					<th><?php esc_html_e( 'Recent Reward Events', 'kd-bonus' ); ?></th>
+					<td>
+						<?php if ( empty( $history ) ) : ?>
+							<p><?php esc_html_e( 'No reward activity has been recorded for this user yet.', 'kd-bonus' ); ?></p>
+						<?php else : ?>
+							<table class="widefat striped" style="max-width:100%;">
+								<thead>
+									<tr>
+										<th><?php esc_html_e( 'Date', 'kd-bonus' ); ?></th>
+										<th><?php esc_html_e( 'Type', 'kd-bonus' ); ?></th>
+										<th><?php esc_html_e( 'Amount', 'kd-bonus' ); ?></th>
+										<th><?php esc_html_e( 'Balance After', 'kd-bonus' ); ?></th>
+										<th><?php esc_html_e( 'Details', 'kd-bonus' ); ?></th>
+									</tr>
+								</thead>
+								<tbody>
+									<?php foreach ( $history as $entry ) : ?>
+										<tr>
+											<td><?php echo esc_html( wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), strtotime( $entry->created_at . ' UTC' ) ) ); ?></td>
+											<td><?php echo esc_html( ucwords( str_replace( '_', ' ', $entry->type ) ) ); ?></td>
+											<td><?php echo esc_html( $this->format_reward_amount( (float) $entry->amount ) ); ?></td>
+											<td><?php echo esc_html( $this->format_reward_amount( (float) $entry->balance_after ) ); ?></td>
+											<td><?php echo esc_html( $entry->description ); ?></td>
+										</tr>
+									<?php endforeach; ?>
+								</tbody>
+							</table>
+						<?php endif; ?>
+					</td>
+				</tr>
+			</tbody>
+		</table>
+		<?php
 	}
 
 	/**
@@ -602,15 +1033,14 @@ class KD_Bonus_Rewards {
 		}
 
 		$eligible_subtotal = $this->get_order_eligible_subtotal( $order );
-		$lifetime_before   = $this->get_lifetime_spend( $user_id );
-		$status_before     = $this->get_status_for_spend( $lifetime_before );
+		$status_before     = $this->get_user_status( $user_id );
 
 		$this->settle_redemption_for_order( $order, $user_id );
 
-		$lifetime_after = $this->adjust_lifetime_spend( $user_id, $eligible_subtotal );
+		$this->adjust_lifetime_spend( $user_id, $eligible_subtotal );
 
-		$status_after   = $this->get_status_for_spend( $lifetime_after );
-		$earned_amount  = 0.0;
+		$status_after  = $this->get_user_status( $user_id );
+		$earned_amount = 0.0;
 
 		if ( ! $this->order_has_coupon_discount( $order ) ) {
 			$reward_percent = (float) $status_after['reward_percent'];
@@ -644,6 +1074,21 @@ class KD_Bonus_Rewards {
 		update_user_meta( $user_id, self::STATUS_META, sanitize_text_field( $status_after['name'] ) );
 
 		if ( $status_before['name'] !== $status_after['name'] ) {
+			$this->record_status_change_event(
+				$user_id,
+				$status_before['name'],
+				$status_after['name'],
+				sprintf(
+					__( 'Membership status changed from %1$s to %2$s after order #%3$s.', 'kd-bonus' ),
+					$status_before['name'],
+					$status_after['name'],
+					$order->get_order_number()
+				),
+				array(
+					'site_id'  => get_current_blog_id(),
+					'order_id' => $order->get_id(),
+				)
+			);
 			$this->maybe_send_status_email( $order, $user_id, $status_after );
 		}
 
@@ -678,6 +1123,8 @@ class KD_Bonus_Rewards {
 		if ( $user_id <= 0 ) {
 			return;
 		}
+
+		$status_before = $this->get_user_status( $user_id );
 
 		$eligible_subtotal = (float) $order->get_meta( '_kd_bonus_eligible_subtotal', true );
 		if ( $eligible_subtotal > 0 ) {
@@ -720,7 +1167,26 @@ class KD_Bonus_Rewards {
 			);
 		}
 
-		update_user_meta( $user_id, self::STATUS_META, sanitize_text_field( $this->get_user_status( $user_id )['name'] ) );
+		$status_after = $this->get_user_status( $user_id );
+		update_user_meta( $user_id, self::STATUS_META, sanitize_text_field( $status_after['name'] ) );
+
+		if ( ( $status_before['name'] ?? '' ) !== ( $status_after['name'] ?? '' ) ) {
+			$this->record_status_change_event(
+				$user_id,
+				$status_before['name'] ?? '',
+				$status_after['name'] ?? '',
+				sprintf(
+					__( 'Membership status changed from %1$s to %2$s after order #%3$s was reversed.', 'kd-bonus' ),
+					$status_before['name'] ?: __( 'No status', 'kd-bonus' ),
+					$status_after['name'] ?: __( 'No status', 'kd-bonus' ),
+					$order->get_order_number()
+				),
+				array(
+					'site_id'  => get_current_blog_id(),
+					'order_id' => $order->get_id(),
+				)
+			);
+		}
 
 		$order->update_meta_data( '_kd_bonus_reversed', 1 );
 		$order->save();
@@ -789,7 +1255,7 @@ class KD_Bonus_Rewards {
 			(float) $delta,
 			$allow_negative,
 			array(
-				'touch_last_earned_at' => 'earn' === $type,
+				'touch_last_earned_at' => ! empty( $context['touch_last_earned_at'] ) || 'earn' === $type,
 			)
 		);
 		$actual_delta   = (float) $balance_change['delta'];
@@ -923,6 +1389,169 @@ class KD_Bonus_Rewards {
 			),
 			array( '%d', '%d', '%d', '%s', '%f', '%f', '%s', '%s', '%s' )
 		);
+
+		$this->prune_reward_event_log();
+	}
+
+	/**
+	 * Keep only the latest reward event rows.
+	 */
+	private function prune_reward_event_log() {
+		global $wpdb;
+
+		$table_name = self::get_table_name();
+		$row_count  = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table_name}" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		if ( $row_count <= self::MAX_EVENT_LOG_ROWS ) {
+			return;
+		}
+
+		$delete_count = $row_count - self::MAX_EVENT_LOG_ROWS;
+		$wpdb->query( $wpdb->prepare( "DELETE FROM {$table_name} ORDER BY id ASC LIMIT %d", $delete_count ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+	}
+
+	/**
+	 * Apply a manual administrator reward adjustment.
+	 *
+	 * @param int    $user_id User ID.
+	 * @param string $action Adjustment action.
+	 * @param float  $amount Requested amount.
+	 * @param string $note Administrator note.
+	 * @return float
+	 */
+	private function apply_manual_adjustment( $user_id, $action, $amount, $note ) {
+		$action = sanitize_key( $action );
+		$amount = max( 0, (float) $amount );
+
+		if ( $amount <= 0 || '' === $note ) {
+			return $this->get_balance( $user_id );
+		}
+
+		if ( 'deduct' === $action ) {
+			$amount = min( $amount, $this->get_balance( $user_id ) );
+			if ( $amount <= 0 ) {
+				return $this->get_balance( $user_id );
+			}
+
+			return $this->adjust_balance(
+				$user_id,
+				-1 * $amount,
+				'manual_deduct',
+				array(
+					'site_id'     => get_current_blog_id(),
+					'currency'    => $this->get_base_currency(),
+					'description' => sprintf( __( 'Administrator deducted rewards. Note: %s', 'kd-bonus' ), $note ),
+				),
+				false
+			);
+		}
+
+		return $this->adjust_balance(
+			$user_id,
+			$amount,
+			'manual_add',
+			array(
+				'site_id'              => get_current_blog_id(),
+				'currency'             => $this->get_base_currency(),
+				'description'          => sprintf( __( 'Administrator added rewards. Note: %s', 'kd-bonus' ), $note ),
+				'touch_last_earned_at' => true,
+			)
+		);
+	}
+
+	/**
+	 * Record a status change event in the reward log.
+	 *
+	 * @param int    $user_id User ID.
+	 * @param string $from_status Previous status.
+	 * @param string $to_status New status.
+	 * @param string $description Event description.
+	 * @param array  $context Optional event context.
+	 */
+	private function record_status_change_event( $user_id, $from_status, $to_status, $description, $context = array() ) {
+		if ( $from_status === $to_status ) {
+			return;
+		}
+
+		$this->insert_transaction(
+			array(
+				'user_id'       => $user_id,
+				'site_id'       => isset( $context['site_id'] ) ? (int) $context['site_id'] : get_current_blog_id(),
+				'order_id'      => isset( $context['order_id'] ) ? (int) $context['order_id'] : 0,
+				'type'          => 'status_change',
+				'amount'        => 0,
+				'balance_after' => $this->get_balance( $user_id ),
+				'currency'      => $this->get_base_currency(),
+				'description'   => $description,
+			)
+		);
+	}
+
+	/**
+	 * Render the network-wide reward event log page.
+	 */
+	public function render_event_log_page() {
+		if ( ! current_user_can( 'manage_network_options' ) ) {
+			wp_die( esc_html__( 'You do not have permission to view the KD Bonus reward event log.', 'kd-bonus' ) );
+		}
+
+		$events      = $this->get_reward_event_log( 200 );
+		$event_users = array();
+
+		if ( ! empty( $events ) ) {
+			$user_ids = array_values( array_unique( array_map( 'absint', wp_list_pluck( $events, 'user_id' ) ) ) );
+			foreach ( get_users( array( 'include' => $user_ids ) ) as $event_user ) {
+				if ( $event_user instanceof WP_User ) {
+					$event_users[ $event_user->ID ] = $event_user;
+				}
+			}
+		}
+		?>
+		<div class="wrap">
+			<h1><?php esc_html_e( 'KD Bonus Reward Event Log', 'kd-bonus' ); ?></h1>
+			<p><?php echo esc_html( sprintf( __( 'The plugin keeps the latest %d reward events and prunes older records automatically. Showing the most recent 200 entries below.', 'kd-bonus' ), self::MAX_EVENT_LOG_ROWS ) ); ?></p>
+			<table class="widefat striped">
+				<thead>
+					<tr>
+						<th><?php esc_html_e( 'Date', 'kd-bonus' ); ?></th>
+						<th><?php esc_html_e( 'User', 'kd-bonus' ); ?></th>
+						<th><?php esc_html_e( 'Type', 'kd-bonus' ); ?></th>
+						<th><?php esc_html_e( 'Amount', 'kd-bonus' ); ?></th>
+						<th><?php esc_html_e( 'Balance After', 'kd-bonus' ); ?></th>
+						<th><?php esc_html_e( 'Order', 'kd-bonus' ); ?></th>
+						<th><?php esc_html_e( 'Details', 'kd-bonus' ); ?></th>
+					</tr>
+				</thead>
+				<tbody>
+					<?php if ( empty( $events ) ) : ?>
+						<tr>
+							<td colspan="7"><?php esc_html_e( 'No reward events have been recorded yet.', 'kd-bonus' ); ?></td>
+						</tr>
+					<?php else : ?>
+						<?php foreach ( $events as $event ) : ?>
+							<?php $event_user = $event_users[ (int) $event->user_id ] ?? null; ?>
+							<tr>
+								<td><?php echo esc_html( wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), strtotime( $event->created_at . ' UTC' ) ) ); ?></td>
+								<td>
+									<?php
+									echo esc_html(
+										$event_user instanceof WP_User
+											? sprintf( '%1$s (#%2$d)', $event_user->user_login, $event->user_id )
+											: sprintf( '#%d', $event->user_id )
+									);
+									?>
+								</td>
+								<td><?php echo esc_html( ucwords( str_replace( '_', ' ', $event->type ) ) ); ?></td>
+								<td><?php echo esc_html( $this->format_reward_amount( (float) $event->amount ) ); ?></td>
+								<td><?php echo esc_html( $this->format_reward_amount( (float) $event->balance_after ) ); ?></td>
+								<td><?php echo esc_html( $event->order_id ? '#' . (int) $event->order_id : '—' ); ?></td>
+								<td><?php echo esc_html( $event->description ); ?></td>
+							</tr>
+						<?php endforeach; ?>
+					<?php endif; ?>
+				</tbody>
+			</table>
+		</div>
+		<?php
 	}
 
 	/**
@@ -1240,5 +1869,35 @@ class KD_Bonus_Rewards {
 		}
 
 		return number_format( (float) $value, (int) $decimals, '.', '' );
+	}
+
+	/**
+	 * Determine whether the current administrator may manage a user's KD Bonus account.
+	 *
+	 * @param int $user_id User ID.
+	 * @return bool
+	 */
+	private function can_manage_user_bonus( $user_id ) {
+		$user_id = absint( $user_id );
+
+		return $user_id > 0 && current_user_can( 'edit_user', $user_id ) && ( current_user_can( 'manage_network_users' ) || current_user_can( 'edit_users' ) || current_user_can( 'promote_users' ) );
+	}
+
+	/**
+	 * Sanitize a decimal input value without requiring WooCommerce.
+	 *
+	 * @param mixed $raw Raw input.
+	 * @return float
+	 */
+	private function sanitize_decimal_input( $raw ) {
+		if ( function_exists( 'wc_format_decimal' ) ) {
+			return (float) wc_format_decimal( $raw );
+		}
+
+		$raw = is_scalar( $raw ) ? (string) $raw : '0';
+		$raw = preg_replace( '/[^0-9,.\-]/', '', $raw );
+		$raw = str_replace( ',', '.', $raw );
+
+		return (float) $raw;
 	}
 }

@@ -63,6 +63,7 @@ class KD_Bonus_Dashboard {
 		$lifetime_spend    = $this->rewards->get_lifetime_spend( $user_id );
 		$status            = $this->rewards->get_user_status( $user_id );
 		$history           = $this->rewards->get_transaction_history( $user_id, 10 );
+		$expiry            = $this->rewards->get_user_expiry_data( $user_id );
 		$current_currency  = get_woocommerce_currency();
 		$discount_value    = $this->rewards->convert_from_base( $available_balance, $current_currency, array( 'context' => 'dashboard' ) );
 		$reward_name       = $settings['reward_name'] ?: __( 'Reward Balance', 'kd-bonus' );
@@ -97,9 +98,27 @@ class KD_Bonus_Dashboard {
 					<strong><?php echo esc_html( sprintf( __( 'Available %s', 'kd-bonus' ), $reward_symbol ) ); ?></strong>
 					<p><?php echo esc_html( $this->rewards->format_reward_amount( $available_balance ) ); ?></p>
 				</div>
+				<div class="kd-bonus-dashboard__card" style="padding:16px;border:1px solid #dcdcde;border-radius:8px;">
+					<strong><?php esc_html_e( 'Last Reward Deposit', 'kd-bonus' ); ?></strong>
+					<p><?php echo esc_html( ! empty( $expiry['last_earned_at'] ) ? wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), (int) $expiry['last_earned_at'] ) : __( 'Never', 'kd-bonus' ) ); ?></p>
+				</div>
+				<div class="kd-bonus-dashboard__card" style="padding:16px;border:1px solid #dcdcde;border-radius:8px;">
+					<strong><?php esc_html_e( 'Reward Expiry', 'kd-bonus' ); ?></strong>
+					<p>
+						<?php
+						if ( empty( $expiry['expiry_days'] ) ) {
+							esc_html_e( 'Disabled', 'kd-bonus' );
+						} elseif ( ! empty( $expiry['expires_at'] ) ) {
+							echo esc_html( wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), (int) $expiry['expires_at'] ) );
+						} else {
+							esc_html_e( 'Waiting for first reward deposit', 'kd-bonus' );
+						}
+						?>
+					</p>
+				</div>
 			</div>
 
-			<h3 style="margin-top:24px;"><?php esc_html_e( 'Reward History', 'kd-bonus' ); ?></h3>
+			<h3 style="margin-top:24px;"><?php esc_html_e( 'Recent Reward Events', 'kd-bonus' ); ?></h3>
 			<?php if ( empty( $history ) ) : ?>
 				<p><?php esc_html_e( 'No reward activity yet.', 'kd-bonus' ); ?></p>
 			<?php else : ?>
