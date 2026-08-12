@@ -59,14 +59,27 @@ class KD_Bonus_Settings {
 			self::SETTINGS_SUBMENU_SLUG,
 			array( $this, 'render_page' )
 		);
+
+		remove_submenu_page( self::MENU_SLUG, self::MENU_SLUG );
 	}
 
 	/**
-	 * Redirect top-level menu requests to the Settings submenu page.
+	 * Render a top-level landing that forwards to the Settings submenu.
 	 */
 	public function render_menu_landing() {
-		wp_safe_redirect( network_admin_url( 'admin.php?page=' . self::SETTINGS_SUBMENU_SLUG ) );
-		exit;
+		if ( ! current_user_can( 'manage_network_options' ) ) {
+			wp_die( esc_html__( 'You do not have permission to manage KD Bonus settings.', 'kd-bonus' ) );
+		}
+
+		$settings_url = network_admin_url( 'admin.php?page=' . self::SETTINGS_SUBMENU_SLUG );
+		?>
+		<div class="wrap">
+			<p><a href="<?php echo esc_url( $settings_url ); ?>"><?php esc_html_e( 'Continue to KD Bonus settings.', 'kd-bonus' ); ?></a></p>
+		</div>
+		<script>
+			window.location.href = <?php echo wp_json_encode( $settings_url ); ?>;
+		</script>
+		<?php
 	}
 
 	/**
