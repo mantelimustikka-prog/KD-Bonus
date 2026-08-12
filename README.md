@@ -4,7 +4,7 @@ Network-activated WordPress multisite starter plugin for a global WooCommerce re
 
 ## Included starter implementation
 
-- Network Admin **KD Bonus** settings submenu under **Settings** with tabbed pages for:
+- Network Admin **KD Bonus** top-level menu with a **Settings** submenu and tabbed pages for:
   - General Settings
   - Membership Statuses
   - Email Settings
