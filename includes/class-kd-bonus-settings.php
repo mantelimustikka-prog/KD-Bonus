@@ -35,6 +35,7 @@ class KD_Bonus_Settings {
 
 		add_action( 'network_admin_menu', array( $this, 'register_menu' ) );
 		add_action( 'network_admin_edit_kd_bonus_save_settings', array( $this, 'save_settings' ) );
+		add_action( 'network_admin_edit_kd_bonus_revoke_rebuild', array( $this, 'revoke_rebuild' ) );
 	}
 
 	/**
@@ -187,6 +188,9 @@ class KD_Bonus_Settings {
 			<?php if ( isset( $_GET['rebuild'] ) && 'started' === sanitize_key( wp_unslash( $_GET['rebuild'] ) ) ) : ?>
 				<div class="notice notice-warning is-dismissible"><p><?php esc_html_e( 'Membership rebuild has started in background. You can keep this page open to monitor progress.', 'kd-bonus' ); ?></p></div>
 			<?php endif; ?>
+			<?php if ( isset( $_GET['revoke'] ) && 'done' === sanitize_key( wp_unslash( $_GET['revoke'] ) ) ) : ?>
+				<div class="notice notice-success is-dismissible"><p><?php esc_html_e( 'Membership rebuild has been cancelled and all rebuild state has been cleared. You can now start a new rebuild.', 'kd-bonus' ); ?></p></div>
+			<?php endif; ?>
 			<?php if ( 'events' === $tab ) : ?>
 				<?php $this->render_event_log_tab(); ?>
 			<?php else : ?>
@@ -267,6 +271,33 @@ class KD_Bonus_Settings {
 		}
 
 		wp_safe_redirect( add_query_arg( $redirect_args, network_admin_url( 'admin.php' ) ) );
+		exit;
+	}
+
+	/**
+	 * Cancel and clean up a running or stalled membership rebuild.
+	 */
+	public function revoke_rebuild() {
+		if ( ! current_user_can( 'manage_network_options' ) ) {
+			wp_die( esc_html__( 'You do not have permission to manage KD Bonus settings.', 'kd-bonus' ) );
+		}
+
+		check_admin_referer( 'kd_bonus_revoke_rebuild' );
+
+		if ( class_exists( 'KD_Bonus_Rewards' ) ) {
+			do_action( 'kd_bonus_revoke_membership_rebuild' );
+		}
+
+		wp_safe_redirect(
+			add_query_arg(
+				array(
+					'page'   => self::SETTINGS_SUBMENU_SLUG,
+					'tab'    => 'general',
+					'revoke' => 'done',
+				),
+				network_admin_url( 'admin.php' )
+			)
+		);
 		exit;
 	}
 
@@ -398,7 +429,15 @@ class KD_Bonus_Settings {
 					</div>
 				</div>
 				<?php if ( $is_rebuilding ) : ?>
-					<p><a href="<?php echo esc_url( network_admin_url( 'admin.php?page=' . self::SETTINGS_SUBMENU_SLUG . '&tab=general' ) ); ?>" class="button button-link"><?php esc_html_e( 'Refresh progress', 'kd-bonus' ); ?></a></p>
+					<p>
+						<a href="<?php echo esc_url( network_admin_url( 'admin.php?page=' . self::SETTINGS_SUBMENU_SLUG . '&tab=general' ) ); ?>" class="button button-link"><?php esc_html_e( 'Refresh progress', 'kd-bonus' ); ?></a>
+						&nbsp;
+						<a
+							href="<?php echo esc_url( wp_nonce_url( network_admin_url( 'edit.php?action=kd_bonus_revoke_rebuild' ), 'kd_bonus_revoke_rebuild' ) ); ?>"
+							class="button button-link-delete"
+							onclick="return window.confirm('<?php echo esc_js( __( 'This will cancel the running rebuild and clear all rebuild state. The Run Rebuild button will become active again. Are you sure?', 'kd-bonus' ) ); ?>');"
+						><?php esc_html_e( 'Revoke Rebuild', 'kd-bonus' ); ?></a>
+					</p>
 				<?php endif; ?>
 				<script>
 					(function () {

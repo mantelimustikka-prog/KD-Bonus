@@ -109,6 +109,7 @@ class KD_Bonus_Rewards {
 		add_action( 'network_admin_notices', array( $this, 'render_copy_status_from_bfw_notice' ) );
 		add_action( 'network_admin_menu', array( $this, 'register_event_log_submenu' ) );
 		add_action( 'kd_bonus_request_membership_rebuild', array( $this, 'start_membership_rebuild' ), 10, 2 );
+		add_action( 'kd_bonus_revoke_membership_rebuild', array( $this, 'revoke_membership_rebuild' ) );
 		add_action( self::MEMBERSHIP_REBUILD_CRON_HOOK, array( $this, 'process_membership_rebuild_batch' ) );
 		add_action( 'wp_ajax_kd_bonus_membership_rebuild_progress', array( $this, 'ajax_membership_rebuild_progress' ) );
 
@@ -134,6 +135,30 @@ class KD_Bonus_Rewards {
 		$state = get_network_option( null, self::MEMBERSHIP_REBUILD_STATE_OPTION, array() );
 
 		return is_array( $state ) ? $state : array();
+	}
+
+	/**
+	 * Cancel and clean up a running or stalled membership rebuild.
+	 *
+	 * Unschedules the rebuild cron hook and deletes the rebuild state so the
+	 * Run Rebuild button becomes active again.
+	 */
+	public function revoke_membership_rebuild() {
+		$main_site_id = function_exists( 'get_main_site_id' ) ? (int) get_main_site_id() : 0;
+		$current_id   = get_current_blog_id();
+		$switched     = $main_site_id > 0 && $main_site_id !== $current_id;
+
+		if ( $switched ) {
+			switch_to_blog( $main_site_id );
+		}
+
+		wp_clear_scheduled_hook( self::MEMBERSHIP_REBUILD_CRON_HOOK );
+
+		if ( $switched ) {
+			restore_current_blog();
+		}
+
+		delete_network_option( null, self::MEMBERSHIP_REBUILD_STATE_OPTION );
 	}
 
 	/**
