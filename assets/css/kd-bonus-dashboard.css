@@ -1,0 +1,101 @@
+/* KD Bonus – Customer Dashboard
+ * Styles for the [kd_bonus_dashboard] shortcode output.
+ */
+
+/* ── Summary cards grid ─────────────────────────────────────────────────── */
+.kd-bonus-dashboard__summary {
+	display: grid;
+	grid-template-columns: repeat( auto-fit, minmax( 220px, 1fr ) );
+	gap: 16px;
+}
+
+.kd-bonus-dashboard__card {
+	padding: 16px;
+	border: 1px solid #dcdcde;
+	border-radius: 8px;
+}
+
+/* ── Section spacing ─────────────────────────────────────────────────────── */
+.kd-bonus-dashboard h3 {
+	margin-top: 24px;
+}
+
+/* ── Tier progress indicator ─────────────────────────────────────────────── */
+.kd-bonus-tier-indicator {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+	margin: 20px 0;
+	padding: 0;
+	list-style: none;
+}
+
+.kd-bonus-tier-indicator__pill {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	min-width: 100px;
+	padding: 10px 16px;
+	border: 2px solid #dcdcde;
+	border-radius: 24px;
+	background: #fff;
+	text-align: center;
+	font-size: 0.875rem;
+	transition: border-color 0.15s, background 0.15s;
+}
+
+/* Completed tier */
+.kd-bonus-tier-indicator__pill--completed {
+	border-color: #2271b1;
+	background: #e8f0fb;
+	color: #2271b1;
+}
+
+/* Current tier – visually prominent */
+.kd-bonus-tier-indicator__pill--current {
+	border-color: #0a4b78;
+	background: #2271b1;
+	color: #fff;
+	font-weight: 700;
+	box-shadow: 0 2px 6px rgba( 10, 75, 120, 0.25 );
+}
+
+/* Future tier */
+.kd-bonus-tier-indicator__pill--future {
+	border-color: #dcdcde;
+	background: #f6f7f7;
+	color: #787c82;
+}
+
+.kd-bonus-tier-indicator__name {
+	display: block;
+	font-size: 0.9em;
+	font-weight: 600;
+}
+
+.kd-bonus-tier-indicator__meta {
+	display: block;
+	font-size: 0.78em;
+	margin-top: 4px;
+	opacity: 0.85;
+}
+
+.kd-bonus-tier-indicator__badge {
+	display: block;
+	font-size: 1.1em;
+	line-height: 1;
+	margin-bottom: 4px;
+}
+
+/* ── Responsive ─────────────────────────────────────────────────────────── */
+@media ( max-width: 480px ) {
+	.kd-bonus-tier-indicator {
+		flex-direction: column;
+	}
+
+	.kd-bonus-tier-indicator__pill {
+		min-width: 0;
+		width: 100%;
+		border-radius: 10px;
+	}
+}
