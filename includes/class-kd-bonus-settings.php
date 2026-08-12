@@ -308,6 +308,9 @@ class KD_Bonus_Settings {
 		$reset_users   = isset( $rebuild_state['user_reset_processed'] ) ? (int) $rebuild_state['user_reset_processed'] : 0;
 		$status_users  = isset( $rebuild_state['status_rebuild_processed'] ) ? (int) $rebuild_state['status_rebuild_processed'] : 0;
 		$state_message = isset( $rebuild_state['message'] ) ? (string) $rebuild_state['message'] : '';
+		$recent_logs   = isset( $rebuild_state['recent_logs'] ) && is_array( $rebuild_state['recent_logs'] ) ? array_values( array_map( 'sanitize_text_field', $rebuild_state['recent_logs'] ) ) : array();
+		$poll_nonce    = wp_create_nonce( 'kd_bonus_membership_rebuild_progress' );
+		$poll_url      = admin_url( 'admin-ajax.php' );
 		?>
 		<tr>
 			<th scope="row"><label for="dashboard_page_slug"><?php esc_html_e( 'Dashboard Page Slug', 'kd-bonus' ); ?></label></th>
@@ -358,7 +361,7 @@ class KD_Bonus_Settings {
 					<p><strong><?php echo esc_html( $state_message ); ?></strong></p>
 				<?php endif; ?>
 				<?php if ( ! empty( $rebuild_phase ) ) : ?>
-					<p>
+					<p id="kd-bonus-rebuild-summary">
 						<?php
 						echo esc_html(
 							sprintf(
@@ -376,9 +379,95 @@ class KD_Bonus_Settings {
 						?>
 					</p>
 				<?php endif; ?>
+				<div id="kd-bonus-rebuild-progress-log-wrap">
+					<p><strong><?php esc_html_e( 'Live Bonus Status updates', 'kd-bonus' ); ?></strong></p>
+					<div id="kd-bonus-rebuild-progress-log" style="max-height:180px;overflow:auto;background:#fff;border:1px solid #ccd0d4;padding:8px;">
+						<?php if ( ! empty( $recent_logs ) ) : ?>
+							<?php foreach ( $recent_logs as $recent_log ) : ?>
+								<div><?php echo esc_html( $recent_log ); ?></div>
+							<?php endforeach; ?>
+						<?php else : ?>
+							<div><?php esc_html_e( 'No per-user updates yet.', 'kd-bonus' ); ?></div>
+						<?php endif; ?>
+					</div>
+				</div>
 				<?php if ( $is_rebuilding ) : ?>
 					<p><a href="<?php echo esc_url( network_admin_url( 'admin.php?page=' . self::SETTINGS_SUBMENU_SLUG . '&tab=general' ) ); ?>" class="button button-link"><?php esc_html_e( 'Refresh progress', 'kd-bonus' ); ?></a></p>
 				<?php endif; ?>
+				<script>
+					(function () {
+						const panel = document.getElementById('kd-bonus-rebuild-progress-log');
+						const summary = document.getElementById('kd-bonus-rebuild-summary');
+						const requestUrl = <?php echo wp_json_encode( $poll_url ); ?>;
+						const requestNonce = <?php echo wp_json_encode( $poll_nonce ); ?>;
+						let active = <?php echo wp_json_encode( (bool) $is_rebuilding ); ?>;
+						if (!panel || !summary || !requestUrl || !requestNonce || !window.fetch) {
+							return;
+						}
+
+						const renderLogs = function (logs) {
+							panel.innerHTML = '';
+							if (!Array.isArray(logs) || !logs.length) {
+								const empty = document.createElement('div');
+								empty.textContent = <?php echo wp_json_encode( __( 'No per-user updates yet.', 'kd-bonus' ) ); ?>;
+								panel.appendChild(empty);
+								return;
+							}
+							logs.forEach(function (entry) {
+								const row = document.createElement('div');
+								row.textContent = String(entry || '');
+								panel.appendChild(row);
+							});
+							panel.scrollTop = panel.scrollHeight;
+						};
+
+						const poll = function () {
+							const body = new URLSearchParams();
+							body.append('action', 'kd_bonus_membership_rebuild_progress');
+							body.append('nonce', requestNonce);
+							return fetch(requestUrl, {
+								method: 'POST',
+								headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+								body: body.toString(),
+								credentials: 'same-origin'
+							})
+								.then(function (response) { return response.json(); })
+								.then(function (result) {
+									if (!result || !result.success || !result.data) {
+										return;
+									}
+									const data = result.data;
+									summary.textContent = [
+										'Phase: ' + String(data.phase || ''),
+										'Reset users: ' + String(data.users_reset || 0) + '/' + String(data.users_total || 0),
+										'Orders scanned: ' + String(data.orders_processed || 0) + '/' + String(data.orders_total || 0),
+										'Statuses rebuilt: ' + String(data.users_processed || 0) + '/' + String(data.users_total || 0)
+									].join(' | ');
+									renderLogs(data.recent_logs || []);
+									active = !!data.running;
+									if (data.failed && data.message) {
+										panel.innerHTML = '';
+										const error = document.createElement('div');
+										error.textContent = String(data.message);
+										panel.appendChild(error);
+									}
+								})
+								.catch(function () {
+									active = false;
+								});
+						};
+
+						if (active) {
+							poll();
+							window.setInterval(function () {
+								if (!active) {
+									return;
+								}
+								poll();
+							}, 5000);
+						}
+					}());
+				</script>
 			</td>
 		</tr>
 		<?php

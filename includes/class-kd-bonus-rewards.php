@@ -31,6 +31,11 @@ class KD_Bonus_Rewards {
 	const MEMBERSHIP_REBUILD_USER_BATCH = 200;
 
 	/**
+	 * Maximum number of recent rebuild progress log lines stored in state.
+	 */
+	const MEMBERSHIP_REBUILD_RECENT_LOG_LIMIT = 80;
+
+	/**
 	 * Lifetime spend meta key.
 	 */
 	const LIFETIME_SPEND_META = 'kd_bonus_lifetime_spend';
@@ -105,6 +110,7 @@ class KD_Bonus_Rewards {
 		add_action( 'network_admin_menu', array( $this, 'register_event_log_submenu' ) );
 		add_action( 'kd_bonus_request_membership_rebuild', array( $this, 'start_membership_rebuild' ), 10, 1 );
 		add_action( self::MEMBERSHIP_REBUILD_CRON_HOOK, array( $this, 'process_membership_rebuild_batch' ) );
+		add_action( 'wp_ajax_kd_bonus_membership_rebuild_progress', array( $this, 'ajax_membership_rebuild_progress' ) );
 
 		if ( ! class_exists( 'WooCommerce' ) ) {
 			return;
@@ -156,12 +162,11 @@ class KD_Bonus_Rewards {
 			$site_ids = array( get_current_blog_id() );
 		}
 
-		$award_status = $this->get_award_order_status();
-		$status_slug  = $this->normalize_award_status_for_wc_query( $award_status );
+		$rebuild_statuses = $this->get_membership_rebuild_order_statuses();
 		$total_orders = 0;
 		foreach ( $site_ids as $site_id ) {
 			switch_to_blog( $site_id );
-			$page_data    = $this->get_orders_page_for_rebuild( $status_slug, 1, 1 );
+			$page_data    = $this->get_orders_page_for_rebuild( $rebuild_statuses, 1, 1 );
 			$total_orders += (int) $page_data['total'];
 			restore_current_blog();
 		}
@@ -183,9 +188,10 @@ class KD_Bonus_Rewards {
 			'site_ids'                 => $site_ids,
 			'site_index'               => 0,
 			'order_page'               => 1,
-			'award_status'             => $award_status,
+			'eligible_order_statuses'  => $rebuild_statuses,
 			'total_orders'             => $total_orders,
 			'processed_orders'         => 0,
+			'recent_logs'              => array(),
 		);
 
 		$this->save_membership_rebuild_state( $state );
@@ -2453,16 +2459,18 @@ class KD_Bonus_Rewards {
 		}
 
 		$site_id = (int) $site_ids[ $site_index ];
-		$award_status = isset( $state['award_status'] ) ? sanitize_key( (string) $state['award_status'] ) : $this->get_award_order_status();
-		$status_slug = $this->normalize_award_status_for_wc_query( $award_status );
-		$order_page  = max( 1, (int) ( $state['order_page'] ?? 1 ) );
+		$statuses = isset( $state['eligible_order_statuses'] ) && is_array( $state['eligible_order_statuses'] ) ? array_values( array_map( 'sanitize_key', $state['eligible_order_statuses'] ) ) : array();
+		if ( empty( $statuses ) ) {
+			$statuses = $this->get_membership_rebuild_order_statuses();
+		}
+		$order_page   = max( 1, (int) ( $state['order_page'] ?? 1 ) );
 		$spend_deltas = array();
 		$orders       = array();
 		$max_pages    = 0;
 
 		switch_to_blog( $site_id );
 		try {
-			$page_data = $this->get_orders_page_for_rebuild( $status_slug, $order_page, self::MEMBERSHIP_REBUILD_ORDER_BATCH );
+			$page_data = $this->get_orders_page_for_rebuild( $statuses, $order_page, self::MEMBERSHIP_REBUILD_ORDER_BATCH );
 			$orders    = isset( $page_data['orders'] ) && is_array( $page_data['orders'] ) ? $page_data['orders'] : array();
 			$max_pages = isset( $page_data['max_pages'] ) ? (int) $page_data['max_pages'] : 0;
 
@@ -2533,12 +2541,26 @@ class KD_Bonus_Rewards {
 		foreach ( $user_ids as $user_id ) {
 			$lifetime_spend = $this->get_lifetime_spend( $user_id );
 			$status         = $this->get_status_for_spend( $lifetime_spend );
+			$status_name    = ! empty( $status['name'] ) ? sanitize_text_field( (string) $status['name'] ) : __( 'None', 'kd-bonus' );
 
 			if ( $lifetime_spend > 0 && ! empty( $status['name'] ) ) {
-				$this->upsert_user_meta_value( $user_id, self::STATUS_META, sanitize_text_field( (string) $status['name'] ) );
+				$this->upsert_user_meta_value( $user_id, self::STATUS_META, $status_name );
 			} else {
 				delete_user_meta( $user_id, self::STATUS_META );
 			}
+
+			$user = get_userdata( $user_id );
+			$email = $user && ! empty( $user->user_email ) ? sanitize_email( (string) $user->user_email ) : sprintf( 'user-%d', (int) $user_id );
+			$state['recent_logs'] = $this->append_membership_rebuild_log_line(
+				$state,
+				sprintf(
+					/* translators: 1: user email, 2: lifetime spend, 3: new membership status name. */
+					__( 'User Bonus Status Changed: %1$s | Lifetime spend: %2$s | New Status: %3$s', 'kd-bonus' ),
+					$email,
+					$this->format_decimal( $lifetime_spend, 2 ),
+					$status_name
+				)
+			);
 		}
 
 		$state['status_rebuild_last_id']  = (int) end( $user_ids );
@@ -2574,6 +2596,92 @@ class KD_Bonus_Rewards {
 		$state['finished_at'] = time();
 		$state['message']     = (string) $message;
 		$this->save_membership_rebuild_state( $state );
+	}
+
+	/**
+	 * Return all WooCommerce order statuses included in membership rebuild scans.
+	 *
+	 * @return array<int,string>
+	 */
+	private function get_membership_rebuild_order_statuses() {
+		return array(
+			'completed',
+			'delivered',
+			'processing',
+			'uk-packed',
+		);
+	}
+
+	/**
+	 * Keep only a small tail of recent rebuild log lines.
+	 *
+	 * @param array<string,mixed> $state Current state.
+	 * @param string              $line Log line.
+	 * @return array<int,string>
+	 */
+	private function append_membership_rebuild_log_line( $state, $line ) {
+		$logs   = isset( $state['recent_logs'] ) && is_array( $state['recent_logs'] ) ? $state['recent_logs'] : array();
+		$logs[] = sanitize_text_field( (string) $line );
+		$limit  = max( 1, (int) self::MEMBERSHIP_REBUILD_RECENT_LOG_LIMIT );
+		if ( count( $logs ) > $limit ) {
+			$logs = array_slice( $logs, 0 - $limit );
+		}
+
+		return array_values( $logs );
+	}
+
+	/**
+	 * AJAX endpoint for polling current membership rebuild progress.
+	 */
+	public function ajax_membership_rebuild_progress() {
+		if ( ! current_user_can( 'manage_network_options' ) ) {
+			wp_send_json_error(
+				array(
+					'message' => __( 'You do not have permission to view membership rebuild progress.', 'kd-bonus' ),
+				),
+				403
+			);
+		}
+
+		if ( ! check_ajax_referer( 'kd_bonus_membership_rebuild_progress', 'nonce', false ) ) {
+			wp_send_json_error(
+				array(
+					'message' => __( 'Security check failed while reading membership rebuild progress.', 'kd-bonus' ),
+				),
+				400
+			);
+		}
+
+		$state          = self::get_membership_rebuild_state();
+		$status         = isset( $state['status'] ) ? sanitize_key( (string) $state['status'] ) : '';
+		$phase          = isset( $state['phase'] ) ? sanitize_key( (string) $state['phase'] ) : '';
+		$total_orders   = isset( $state['total_orders'] ) ? (int) $state['total_orders'] : 0;
+		$done_orders    = isset( $state['processed_orders'] ) ? (int) $state['processed_orders'] : 0;
+		$total_users    = isset( $state['total_users'] ) ? (int) $state['total_users'] : 0;
+		$done_users     = isset( $state['status_rebuild_processed'] ) ? (int) $state['status_rebuild_processed'] : 0;
+		$reset_users    = isset( $state['user_reset_processed'] ) ? (int) $state['user_reset_processed'] : 0;
+		$recent_logs    = isset( $state['recent_logs'] ) && is_array( $state['recent_logs'] ) ? array_values( array_map( 'sanitize_text_field', $state['recent_logs'] ) ) : array();
+		$message        = isset( $state['message'] ) ? sanitize_text_field( (string) $state['message'] ) : '';
+		$is_running     = ! empty( $state['running'] );
+		$is_completed   = 'completed' === $status || 'completed' === $phase;
+		$is_failed      = 'failed' === $status || 'failed' === $phase;
+
+		wp_send_json_success(
+			array(
+				'status'           => $status ? $status : ( $is_running ? 'running' : '' ),
+				'phase'            => $phase,
+				'message'          => $message,
+				'orders_processed' => $done_orders,
+				'orders_total'     => $total_orders,
+				'users_processed'  => $done_users,
+				'users_total'      => $total_users,
+				'users_reset'      => $reset_users,
+				'recent_logs'      => $recent_logs,
+				'running'          => $is_running,
+				'completed'        => $is_completed,
+				'failed'           => $is_failed,
+			)
+		);
 	}
 
 	/**
@@ -2616,16 +2724,16 @@ class KD_Bonus_Rewards {
 	/**
 	 * Read one paged set of orders for rebuild processing.
 	 *
-	 * @param string $status_slug WooCommerce status slug without wc- prefix.
+	 * @param array<int,string> $statuses WooCommerce status slugs without wc- prefix.
 	 * @param int    $page Page number.
 	 * @param int    $limit Batch size.
 	 * @return array<string,mixed>
 	 */
-	private function get_orders_page_for_rebuild( $status_slug, $page, $limit ) {
+	private function get_orders_page_for_rebuild( $statuses, $page, $limit ) {
 		$query = wc_get_orders(
 			array(
 				'type'     => 'shop_order',
-				'status'   => array( $status_slug ),
+				'status'   => $statuses,
 				'limit'    => max( 1, (int) $limit ),
 				'page'     => max( 1, (int) $page ),
 				'paginate' => true,
