@@ -45,7 +45,6 @@ class KD_Bonus_Dashboard {
 	 */
 	public function register() {
 		add_shortcode( 'kd_bonus_dashboard', array( $this, 'render_shortcode' ) );
-		add_action( 'wp_enqueue_scripts', array( $this, 'register_dashboard_styles' ) );
 
 		if ( ! class_exists( 'WooCommerce' ) ) {
 			return;
@@ -95,87 +94,6 @@ class KD_Bonus_Dashboard {
 	}
 
 	/**
-	 * Register the dashboard stylesheet so it can be enqueued on demand.
-	 */
-	public function register_dashboard_styles() {
-		wp_register_style(
-			'kd-bonus-dashboard',
-			plugin_dir_url( KD_BONUS_PLUGIN_FILE ) . 'assets/css/kd-bonus-dashboard.css',
-			array(),
-			KD_BONUS_VERSION
-		);
-	}
-
-	/**
-	 * Enqueue the dashboard stylesheet.
-	 * Called from within the shortcode so the style is only loaded on pages that use it.
-	 */
-	private function enqueue_dashboard_styles() {
-		wp_enqueue_style( 'kd-bonus-dashboard' );
-	}
-
-	/**
-	 * Render the membership tier progress indicator.
-	 *
-	 * @param array<string,mixed> $statuses  All configured membership tiers, sorted by threshold.
-	 * @param string              $current_name Name of the user's current tier.
-	 * @return string HTML for the tier indicator.
-	 */
-	private function render_tier_indicator( $statuses, $current_name ) {
-		if ( empty( $statuses ) ) {
-			return '';
-		}
-
-		$found_current = false;
-		$html          = '<ul class="kd-bonus-tier-indicator" aria-label="' . esc_attr__( 'Membership tiers', 'kd-bonus' ) . '">' . "\n";
-
-		foreach ( $statuses as $tier ) {
-			$name      = isset( $tier['name'] ) ? (string) $tier['name'] : '';
-			$threshold = isset( $tier['threshold'] ) ? (float) $tier['threshold'] : 0.0;
-			$reward    = isset( $tier['reward_percent'] ) ? (float) $tier['reward_percent'] : 0.0;
-
-			$is_current = ( $name === $current_name );
-
-			if ( $is_current ) {
-				$state_class  = 'kd-bonus-tier-indicator__pill--current';
-				$badge        = '&#9679;'; // filled circle
-				$found_current = true;
-			} elseif ( ! $found_current ) {
-				$state_class = 'kd-bonus-tier-indicator__pill--completed';
-				$badge       = '&#10003;'; // checkmark
-			} else {
-				$state_class = 'kd-bonus-tier-indicator__pill--future';
-				$badge       = '&#9675;'; // open circle
-			}
-
-			$html .= '<li class="kd-bonus-tier-indicator__pill ' . esc_attr( $state_class ) . '">';
-			$html .= '<span class="kd-bonus-tier-indicator__badge" aria-hidden="true">' . $badge . '</span>';
-			$html .= '<span class="kd-bonus-tier-indicator__name">' . esc_html( $name ) . '</span>';
-
-			if ( $threshold > 0 || $reward > 0 ) {
-				$meta_parts = array();
-				if ( $threshold > 0 ) {
-					$meta_parts[] = sprintf(
-						/* translators: %s: formatted currency amount */
-						__( 'From %s', 'kd-bonus' ),
-						wp_kses_post( wc_price( $threshold, array( 'currency' => $this->rewards->get_base_currency() ) ) )
-					);
-				}
-				if ( $reward > 0 ) {
-					$meta_parts[] = esc_html( wc_format_decimal( $reward, 2 ) . '%' );
-				}
-				$html .= '<span class="kd-bonus-tier-indicator__meta">' . wp_kses_post( implode( ' &middot; ', $meta_parts ) ) . '</span>';
-			}
-
-			$html .= '</li>' . "\n";
-		}
-
-		$html .= '</ul>';
-
-		return $html;
-	}
-
-	/**
 	 * Render the customer dashboard on the My Account endpoint.
 	 */
 	public function render_my_account_endpoint() {
@@ -209,45 +127,41 @@ class KD_Bonus_Dashboard {
 		$reward_name       = $settings['reward_name'] ?: __( 'Reward Balance', 'kd-bonus' );
 		$reward_symbol     = $settings['reward_symbol'] ?: '$KD';
 
-		$this->enqueue_dashboard_styles();
-
 		ob_start();
 		?>
 		<div class="kd-bonus-dashboard">
 			<h2><?php esc_html_e( 'KD Bonus Dashboard', 'kd-bonus' ); ?></h2>
 
-			<?php echo wp_kses_post( $this->render_tier_indicator( $this->rewards->get_membership_statuses(), $status['name'] ) ); ?>
-
-			<div class="kd-bonus-dashboard__summary">
-				<div class="kd-bonus-dashboard__card">
+			<div class="kd-bonus-dashboard__summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;">
+				<div class="kd-bonus-dashboard__card" style="padding:16px;border:1px solid #dcdcde;border-radius:8px;">
 					<strong><?php echo esc_html( $reward_name ); ?></strong>
 					<p><?php echo esc_html( $this->rewards->format_reward_amount( $balance ) ); ?></p>
 				</div>
-				<div class="kd-bonus-dashboard__card">
+				<div class="kd-bonus-dashboard__card" style="padding:16px;border:1px solid #dcdcde;border-radius:8px;">
 					<strong><?php esc_html_e( 'Available Discount', 'kd-bonus' ); ?></strong>
 					<p><?php echo wp_kses_post( wc_price( $discount_value ) ); ?></p>
 				</div>
-				<div class="kd-bonus-dashboard__card">
+				<div class="kd-bonus-dashboard__card" style="padding:16px;border:1px solid #dcdcde;border-radius:8px;">
 					<strong><?php esc_html_e( 'Membership Status', 'kd-bonus' ); ?></strong>
 					<p><?php echo esc_html( $status['name'] ); ?></p>
 				</div>
-				<div class="kd-bonus-dashboard__card">
+				<div class="kd-bonus-dashboard__card" style="padding:16px;border:1px solid #dcdcde;border-radius:8px;">
 					<strong><?php esc_html_e( 'Lifetime Eligible Spend', 'kd-bonus' ); ?></strong>
 					<p><?php echo wp_kses_post( wc_price( $lifetime_spend, array( 'currency' => $this->rewards->get_base_currency() ) ) ); ?></p>
 				</div>
-				<div class="kd-bonus-dashboard__card">
+				<div class="kd-bonus-dashboard__card" style="padding:16px;border:1px solid #dcdcde;border-radius:8px;">
 					<strong><?php esc_html_e( 'Reward Rate', 'kd-bonus' ); ?></strong>
 					<p><?php echo esc_html( wc_format_decimal( (float) $status['reward_percent'], 2 ) . '%' ); ?></p>
 				</div>
-				<div class="kd-bonus-dashboard__card">
+				<div class="kd-bonus-dashboard__card" style="padding:16px;border:1px solid #dcdcde;border-radius:8px;">
 					<strong><?php echo esc_html( sprintf( __( 'Available %s', 'kd-bonus' ), $reward_symbol ) ); ?></strong>
 					<p><?php echo esc_html( $this->rewards->format_reward_amount( $available_balance ) ); ?></p>
 				</div>
-				<div class="kd-bonus-dashboard__card">
+				<div class="kd-bonus-dashboard__card" style="padding:16px;border:1px solid #dcdcde;border-radius:8px;">
 					<strong><?php esc_html_e( 'Last Reward Deposit', 'kd-bonus' ); ?></strong>
 					<p><?php echo esc_html( ! empty( $expiry['last_earned_at'] ) ? wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), (int) $expiry['last_earned_at'] ) : __( 'Never', 'kd-bonus' ) ); ?></p>
 				</div>
-				<div class="kd-bonus-dashboard__card">
+				<div class="kd-bonus-dashboard__card" style="padding:16px;border:1px solid #dcdcde;border-radius:8px;">
 					<strong><?php esc_html_e( 'Reward Expiry', 'kd-bonus' ); ?></strong>
 					<p>
 						<?php
@@ -263,7 +177,7 @@ class KD_Bonus_Dashboard {
 				</div>
 			</div>
 
-			<h3><?php esc_html_e( 'Recent Reward Events', 'kd-bonus' ); ?></h3>
+			<h3 style="margin-top:24px;"><?php esc_html_e( 'Recent Reward Events', 'kd-bonus' ); ?></h3>
 			<?php if ( empty( $history ) ) : ?>
 				<p><?php esc_html_e( 'No reward activity yet.', 'kd-bonus' ); ?></p>
 			<?php else : ?>
@@ -291,7 +205,7 @@ class KD_Bonus_Dashboard {
 				</table>
 			<?php endif; ?>
 
-			<h3><?php esc_html_e( 'Membership Statuses', 'kd-bonus' ); ?></h3>
+			<h3 style="margin-top:24px;"><?php esc_html_e( 'Membership Statuses', 'kd-bonus' ); ?></h3>
 			<?php echo wp_kses_post( $this->settings->render_membership_statuses_table_shortcode() ); ?>
 		</div>
 		<?php
