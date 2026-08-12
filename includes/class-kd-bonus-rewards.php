@@ -2055,7 +2055,7 @@ class KD_Bonus_Rewards {
 									<?php
 									echo esc_html(
 										$event_user instanceof WP_User
-											? sprintf( '%1$s (#%2$d)', $event_user->user_login, $event->user_id )
+											? sprintf( '%1$s (%2$s)', $event_user->user_login, $event_user->user_email )
 											: sprintf( '#%d', $event->user_id )
 									);
 									?>
