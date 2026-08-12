@@ -86,6 +86,11 @@ class KD_Bonus_Rewards {
 	const NEW_ACCOUNT_REWARD_AWARDED_META = 'kd_bonus_new_account_reward_awarded';
 
 	/**
+	 * User meta key storing the expiry timestamp already reminded for.
+	 */
+	const EXPIRY_REMINDER_SENT_FOR_META = 'kd_bonus_expiry_reminder_sent_for';
+
+	/**
 	 * Settings handler.
 	 *
 	 * @var KD_Bonus_Settings
@@ -452,6 +457,17 @@ class KD_Bonus_Rewards {
 		$settings = $this->get_reward_settings();
 
 		return max( 0, absint( $settings['reward_expiry_days'] ?? 0 ) );
+	}
+
+	/**
+	 * Get the configured reminder lead time before unused points expire.
+	 *
+	 * @return int
+	 */
+	public function get_reward_expiry_notification_days() {
+		$settings = $this->get_reward_settings();
+
+		return max( 0, absint( $settings['reward_expiry_notification_days'] ?? 0 ) );
 	}
 
 	/**
@@ -2217,14 +2233,68 @@ class KD_Bonus_Rewards {
 	}
 
 	/**
+	 * Maybe send a reward expiry reminder email.
+	 *
+	 * @param int   $user_id User ID.
+	 * @param int   $expires_at Expiry timestamp.
+	 * @param float $balance Current reward balance.
+	 */
+	private function maybe_send_expiry_reminder_email( $user_id, $expires_at, $balance ) {
+		$settings = $this->get_reward_settings();
+		if ( empty( $settings['email_notifications'] ) ) {
+			return;
+		}
+
+		$lead_days = $this->get_reward_expiry_notification_days();
+		if ( $lead_days <= 0 || $expires_at <= time() || $balance <= 0 ) {
+			return;
+		}
+
+		$window_opens_at = $expires_at - ( $lead_days * DAY_IN_SECONDS );
+		if ( time() < $window_opens_at ) {
+			return;
+		}
+
+		if ( (int) get_user_meta( $user_id, self::EXPIRY_REMINDER_SENT_FOR_META, true ) === $expires_at ) {
+			return;
+		}
+
+		$user = get_userdata( $user_id );
+		if ( ! $user || empty( $user->user_email ) ) {
+			return;
+		}
+
+		$replacements = array(
+			'{customer_name}'     => $user->display_name ?: $user->user_login,
+			'{balance_amount}'    => $this->format_reward_amount( $balance ),
+			'{reward_symbol}'     => $settings['reward_symbol'],
+			'{expiry_date}'       => wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), $expires_at ),
+			'{days_until_expiry}' => (string) max( 1, (int) ceil( ( $expires_at - time() ) / DAY_IN_SECONDS ) ),
+		);
+
+		$sent = $this->send_reward_email(
+			$user->user_email,
+			strtr( $settings['reward_expiry_notification_email_subject'], $replacements ),
+			strtr( $settings['reward_expiry_notification_email_body'], $replacements )
+		);
+
+		if ( $sent ) {
+			$this->upsert_user_meta_value( $user_id, self::EXPIRY_REMINDER_SENT_FOR_META, (string) $expires_at );
+			wp_cache_delete( $user_id, 'user_meta' );
+			clean_user_cache( $user_id );
+		}
+	}
+
+	/**
 	 * Send a reward email using HTML content generated from stored templates.
 	 *
 	 * @param string $to Recipient email.
 	 * @param string $subject Subject line.
 	 * @param string $body Email body template output.
+	 * @return bool
 	 */
 	private function send_reward_email( $to, $subject, $body ) {
-		wp_mail(
+		return wp_mail(
 			$to,
 			wp_strip_all_tags( $subject ),
 			do_shortcode( (string) $body ),
@@ -2305,7 +2375,12 @@ class KD_Bonus_Rewards {
 		}
 
 		$expiry_seconds = $expiry_days * DAY_IN_SECONDS;
-		if ( ( $last_earned_at + $expiry_seconds ) > time() ) {
+		$expires_at     = $last_earned_at + $expiry_seconds;
+		$current_balance = (float) get_user_meta( $user_id, self::BALANCE_META, true );
+
+		$this->maybe_send_expiry_reminder_email( $user_id, $expires_at, $current_balance );
+
+		if ( $expires_at > time() ) {
 			return;
 		}
 
