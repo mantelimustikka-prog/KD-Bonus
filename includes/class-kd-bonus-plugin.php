@@ -91,10 +91,7 @@ class KD_Bonus_Plugin {
 	public function load() {
 		$this->settings->register();
 		$this->dashboard->register();
-
-		if ( class_exists( 'WooCommerce' ) ) {
-			$this->rewards->register();
-		}
+		$this->rewards->register();
 	}
 
 	/**
