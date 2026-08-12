@@ -64,7 +64,6 @@ class KD_Bonus_Rewards {
 	public function register() {
 		add_filter( 'wpmu_users_columns', array( $this, 'add_network_users_bonus_status_column' ) );
 		add_filter( 'manage_users-network_custom_column', array( $this, 'render_network_users_bonus_status_column' ), 10, 3 );
-		add_filter( 'manage_users_custom_column', array( $this, 'render_network_users_bonus_status_column' ), 10, 3 );
 
 		if ( ! class_exists( 'WooCommerce' ) ) {
 			return;
@@ -278,11 +277,11 @@ class KD_Bonus_Rewards {
 		$balance         = $this->get_balance( $user_id );
 		$lifetime_spend  = $this->get_lifetime_spend( $user_id );
 		$stored_status   = trim( (string) get_user_meta( $user_id, self::STATUS_META, true ) );
-		$computed_status = $this->get_user_status( $user_id );
+		$computed_status = $this->get_status_for_spend( $lifetime_spend );
 		$status_name     = '';
 
-		if ( $lifetime_spend > 0 && ! empty( $computed_status['name'] ) ) {
-			$status_name = (string) $computed_status['name'];
+		if ( $lifetime_spend > 0 ) {
+			$status_name = ! empty( $computed_status['name'] ) ? (string) $computed_status['name'] : '';
 		} elseif ( '' !== $stored_status ) {
 			$status_name = $stored_status;
 		}
@@ -321,10 +320,11 @@ class KD_Bonus_Rewards {
 	 */
 	private function format_network_reward_amount( $amount ) {
 		$settings = $this->get_reward_settings();
-		$symbol   = $settings['reward_symbol'] ?: '$KD';
+		$symbol   = $settings['reward_symbol'] ?? '$KD';
+		$symbol   = '' !== $symbol ? $symbol : '$KD';
 		$decimals = function_exists( 'wc_get_price_decimals' ) ? wc_get_price_decimals() : 2;
 		$amount   = (float) $amount;
-		$scale    = floor( $amount ) === $amount ? 0 : $decimals;
+		$scale    = abs( $amount - round( $amount ) ) < 0.00001 ? 0 : $decimals;
 
 		return sprintf( '%1$s %2$s', number_format_i18n( $amount, $scale ), $symbol );
 	}
