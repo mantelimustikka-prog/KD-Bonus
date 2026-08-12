@@ -26,6 +26,11 @@ class KD_Bonus_Rewards {
 	const STATUS_META = 'kd_bonus_membership_status';
 
 	/**
+	 * Last reward deposit timestamp meta key.
+	 */
+	const LAST_EARNED_AT_META = 'kd_bonus_last_earned_at';
+
+	/**
 	 * Session key for base redemption amount.
 	 */
 	const SESSION_REDEMPTION_KEY = 'kd_bonus_redemption_base';
@@ -36,6 +41,13 @@ class KD_Bonus_Rewards {
 	 * @var KD_Bonus_Settings
 	 */
 	private $settings;
+
+	/**
+	 * Users already checked for expiry during the current request.
+	 *
+	 * @var array<int,bool>
+	 */
+	private $expiry_checked_users = array();
 
 	/**
 	 * Constructor.
@@ -107,6 +119,8 @@ class KD_Bonus_Rewards {
 	 * @return float
 	 */
 	public function get_balance( $user_id ) {
+		$this->maybe_expire_user_balance( $user_id );
+
 		return (float) get_user_meta( $user_id, self::BALANCE_META, true );
 	}
 
@@ -149,6 +163,17 @@ class KD_Bonus_Rewards {
 		$status   = isset( $settings['award_order_status'] ) ? sanitize_key( $settings['award_order_status'] ) : '';
 
 		return $status ? $status : 'wc-processing';
+	}
+
+	/**
+	 * Get the configured number of days before unused points expire.
+	 *
+	 * @return int
+	 */
+	public function get_reward_expiry_days() {
+		$settings = $this->get_reward_settings();
+
+		return max( 0, absint( $settings['reward_expiry_days'] ?? 0 ) );
 	}
 
 	/**
@@ -493,8 +518,14 @@ class KD_Bonus_Rewards {
 		$lifetime_after = $this->adjust_lifetime_spend( $user_id, $eligible_subtotal );
 
 		$status_after   = $this->get_status_for_spend( $lifetime_after );
-		$reward_percent = (float) $status_after['reward_percent'];
-		$earned_amount  = round( $eligible_subtotal * ( $reward_percent / 100 ), wc_get_price_decimals() );
+		$earned_amount  = 0.0;
+
+		if ( ! $this->order_has_coupon_discount( $order ) ) {
+			$reward_percent = (float) $status_after['reward_percent'];
+			$earned_amount  = round( $eligible_subtotal * ( $reward_percent / 100 ), wc_get_price_decimals() );
+		} else {
+			$order->update_meta_data( '_kd_bonus_coupon_excluded', 1 );
+		}
 
 		if ( $earned_amount > 0 ) {
 			$new_balance = $this->adjust_balance(
@@ -659,8 +690,22 @@ class KD_Bonus_Rewards {
 	 * @param array  $context Transaction context.
 	 * @return float
 	 */
-	private function adjust_balance( $user_id, $delta, $type, $context = array() ) {
-		$new_balance = $this->atomic_adjust_user_meta_decimal( $user_id, self::BALANCE_META, (float) $delta );
+	private function adjust_balance( $user_id, $delta, $type, $context = array(), $allow_negative = true ) {
+		$balance_change = $this->atomic_adjust_user_meta_decimal_with_details(
+			$user_id,
+			self::BALANCE_META,
+			(float) $delta,
+			$allow_negative,
+			array(
+				'touch_last_earned_at' => 'earn' === $type,
+			)
+		);
+		$actual_delta   = (float) $balance_change['delta'];
+		$new_balance    = (float) $balance_change['current'];
+
+		if ( 0.0 === $actual_delta ) {
+			return $new_balance;
+		}
 
 		$this->insert_transaction(
 			array(
@@ -668,7 +713,7 @@ class KD_Bonus_Rewards {
 				'site_id'       => isset( $context['site_id'] ) ? (int) $context['site_id'] : get_current_blog_id(),
 				'order_id'      => isset( $context['order_id'] ) ? (int) $context['order_id'] : 0,
 				'type'          => $type,
-				'amount'        => (float) $delta,
+				'amount'        => $actual_delta,
 				'balance_after' => $new_balance,
 				'currency'      => isset( $context['currency'] ) ? (string) $context['currency'] : $this->get_base_currency(),
 				'description'   => isset( $context['description'] ) ? (string) $context['description'] : '',
@@ -700,36 +745,67 @@ class KD_Bonus_Rewards {
 	 * @return float
 	 */
 	private function atomic_adjust_user_meta_decimal( $user_id, $meta_key, $delta, $allow_negative = true ) {
+		$details = $this->atomic_adjust_user_meta_decimal_with_details( $user_id, $meta_key, $delta, $allow_negative );
+
+		return (float) $details['current'];
+	}
+
+	/**
+	 * Atomically adjust a decimal user meta value and return the applied change details.
+	 *
+	 * @param int    $user_id User ID.
+	 * @param string $meta_key Meta key.
+	 * @param float  $delta Delta amount.
+	 * @param bool   $allow_negative Whether the resulting total may be negative.
+	 * @param array  $options Optional behavior flags.
+	 * @return array<string,float>
+	 */
+	private function atomic_adjust_user_meta_decimal_with_details( $user_id, $meta_key, $delta, $allow_negative = true, $options = array() ) {
 		global $wpdb;
 
 		$lock_key      = 'kd_bonus_meta_' . md5( $user_id . '|' . $meta_key );
 		$lock_acquired = (int) $wpdb->get_var( $wpdb->prepare( 'SELECT GET_LOCK(%s, 5)', $lock_key ) );
 
 		if ( 1 !== $lock_acquired ) {
-			return (float) get_user_meta( $user_id, $meta_key, true );
+			$current = (float) get_user_meta( $user_id, $meta_key, true );
+
+			return array(
+				'previous' => $current,
+				'current'  => $current,
+				'delta'    => 0.0,
+			);
 		}
 
-		if ( ! metadata_exists( 'user', $user_id, $meta_key ) ) {
-			add_user_meta( $user_id, $meta_key, '0', true );
+		try {
+			$current   = $this->get_user_meta_decimal_direct( $user_id, $meta_key );
+			$new_value = $current + (float) $delta;
+			if ( ! $allow_negative ) {
+				$new_value = max( 0, $new_value );
+			}
+
+			$this->upsert_user_meta_value(
+				$user_id,
+				$meta_key,
+				$this->format_decimal( $new_value, 4 )
+			);
+
+			// Keep the latest earn timestamp in sync before releasing the balance lock so
+			// expiry re-checks observe the refreshed deposit time together with the new balance.
+			if ( ! empty( $options['touch_last_earned_at'] ) && ( $new_value - $current ) > 0 ) {
+				$this->upsert_user_meta_value( $user_id, self::LAST_EARNED_AT_META, (string) time() );
+			}
+
+			wp_cache_delete( $user_id, 'user_meta' );
+			clean_user_cache( $user_id );
+
+			return array(
+				'previous' => $current,
+				'current'  => $new_value,
+				'delta'    => $new_value - $current,
+			);
+		} finally {
+			$wpdb->query( $wpdb->prepare( 'SELECT RELEASE_LOCK(%s)', $lock_key ) );
 		}
-
-		$delta_sql  = number_format( (float) $delta, 4, '.', '' );
-		$expression = $allow_negative ? 'ROUND(CAST(meta_value AS DECIMAL(18,4)) + %s, 4)' : 'GREATEST(0, ROUND(CAST(meta_value AS DECIMAL(18,4)) + %s, 4))';
-		$query      = $wpdb->prepare(
-			"UPDATE {$wpdb->usermeta}
-			SET meta_value = {$expression}
-			WHERE user_id = %d
-				AND meta_key = %s",
-			$delta_sql,
-			$user_id,
-			$meta_key
-		);
-
-		$wpdb->query( $query ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
-		$value = (float) get_user_meta( $user_id, $meta_key, true );
-		$wpdb->query( $wpdb->prepare( 'SELECT RELEASE_LOCK(%s)', $lock_key ) );
-
-		return $value;
 	}
 
 	/**
@@ -747,8 +823,8 @@ class KD_Bonus_Rewards {
 				'site_id'       => (int) $row['site_id'],
 				'order_id'      => (int) $row['order_id'],
 				'type'          => sanitize_key( $row['type'] ),
-				'amount'        => wc_format_decimal( $row['amount'], 4 ),
-				'balance_after' => wc_format_decimal( $row['balance_after'], 4 ),
+				'amount'        => $this->format_decimal( $row['amount'], 4 ),
+				'balance_after' => $this->format_decimal( $row['balance_after'], 4 ),
 				'currency'      => sanitize_text_field( $row['currency'] ),
 				'description'   => sanitize_text_field( $row['description'] ),
 				'created_at'    => current_time( 'mysql', true ),
@@ -848,5 +924,229 @@ class KD_Bonus_Rewards {
 		$cap  = (float) $cart->get_subtotal() + (float) $cart->get_cart_contents_tax() + (float) $cart->get_shipping_total() + (float) $cart->get_shipping_tax();
 
 		return max( 0, $cap );
+	}
+
+	/**
+	 * Check whether the order used coupon-based discounts.
+	 *
+	 * @param WC_Order $order WooCommerce order.
+	 * @return bool
+	 */
+	private function order_has_coupon_discount( $order ) {
+		$coupon_codes = method_exists( $order, 'get_coupon_codes' ) ? $order->get_coupon_codes() : array();
+		if ( ! empty( $coupon_codes ) ) {
+			return true;
+		}
+
+		return ! empty( $order->get_items( 'coupon' ) );
+	}
+
+	/**
+	 * Expire a customer's unused balance when the configured threshold has passed.
+	 *
+	 * @param int $user_id User ID.
+	 */
+	private function maybe_expire_user_balance( $user_id ) {
+		$user_id = (int) $user_id;
+
+		if ( $user_id <= 0 ) {
+			return;
+		}
+
+		if ( isset( $this->expiry_checked_users[ $user_id ] ) ) {
+			return;
+		}
+
+		$this->expiry_checked_users[ $user_id ] = true;
+
+		$expiry_days = $this->get_reward_expiry_days();
+		if ( $expiry_days <= 0 ) {
+			return;
+		}
+
+		$last_earned_at = $this->get_last_earned_timestamp( $user_id );
+		if ( $last_earned_at <= 0 ) {
+			return;
+		}
+
+		$expiry_seconds = $expiry_days * DAY_IN_SECONDS;
+		if ( ( $last_earned_at + $expiry_seconds ) > time() ) {
+			return;
+		}
+
+		// This is only a fast-path check. expire_stale_balance() repeats the expiry test
+		// under the balance lock before it zeroes any stored points.
+		$expiry_result = $this->expire_stale_balance( $user_id, $expiry_seconds );
+		if ( $expiry_result['expired'] <= 0 ) {
+			return;
+		}
+
+		$this->insert_transaction(
+			array(
+				'user_id'       => $user_id,
+				'site_id'       => get_current_blog_id(),
+				'order_id'      => 0,
+				'type'          => 'expire',
+				'amount'        => -1 * $expiry_result['expired'],
+				'balance_after' => $expiry_result['current'],
+				'currency'      => $this->get_base_currency(),
+				'description'   => __( 'Expired unused KD Bonus balance.', 'kd-bonus' ),
+			)
+		);
+	}
+
+	/**
+	 * Resolve the timestamp of the user's last reward deposit.
+	 *
+	 * @param int $user_id User ID.
+	 * @return int
+	 */
+	private function get_last_earned_timestamp( $user_id ) {
+		global $wpdb;
+
+		$timestamp = (int) get_user_meta( $user_id, self::LAST_EARNED_AT_META, true );
+		if ( $timestamp > 0 ) {
+			return $timestamp;
+		}
+
+		$table_name = self::get_table_name();
+		$created_at = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT created_at
+				FROM {$table_name}
+				WHERE user_id = %d
+					AND type = %s
+					AND amount > 0
+				ORDER BY id DESC
+				LIMIT 1",
+				$user_id,
+				'earn'
+			)
+		);
+
+		if ( empty( $created_at ) ) {
+			return 0;
+		}
+
+		$datetime = date_create_immutable( $created_at, new DateTimeZone( 'UTC' ) );
+		if ( false === $datetime ) {
+			return 0;
+		}
+
+		$timestamp = $datetime->getTimestamp();
+
+		$this->upsert_user_meta_value( $user_id, self::LAST_EARNED_AT_META, (string) $timestamp );
+		wp_cache_delete( $user_id, 'user_meta' );
+		clean_user_cache( $user_id );
+
+		return (int) $timestamp;
+	}
+
+	/**
+	 * Expire stale balance under lock using the live stored values.
+	 *
+	 * @param int $user_id User ID.
+	 * @param int $expiry_seconds Expiry age in seconds.
+	 * @return array<string,float>
+	 */
+	private function expire_stale_balance( $user_id, $expiry_seconds ) {
+		global $wpdb;
+
+		$lock_key      = 'kd_bonus_meta_' . md5( $user_id . '|' . self::BALANCE_META );
+		$lock_acquired = (int) $wpdb->get_var( $wpdb->prepare( 'SELECT GET_LOCK(%s, 5)', $lock_key ) );
+
+		if ( 1 !== $lock_acquired ) {
+			return array(
+				'expired' => 0.0,
+				'current' => (float) get_user_meta( $user_id, self::BALANCE_META, true ),
+			);
+		}
+
+		try {
+			$current_balance = $this->get_user_meta_decimal_direct( $user_id, self::BALANCE_META );
+			$last_earned_at  = (int) $this->get_user_meta_value_direct( $user_id, self::LAST_EARNED_AT_META, '0' );
+
+			if ( $current_balance <= 0 || $last_earned_at <= 0 || ( $last_earned_at + $expiry_seconds ) > time() ) {
+				return array(
+					'expired' => 0.0,
+					'current' => $current_balance,
+				);
+			}
+
+			$this->upsert_user_meta_value( $user_id, self::BALANCE_META, $this->format_decimal( 0, 4 ) );
+			wp_cache_delete( $user_id, 'user_meta' );
+			clean_user_cache( $user_id );
+
+			return array(
+				'expired' => $current_balance,
+				'current' => 0.0,
+			);
+		} finally {
+			$wpdb->query( $wpdb->prepare( 'SELECT RELEASE_LOCK(%s)', $lock_key ) );
+		}
+	}
+
+	/**
+	 * Read a user meta value directly from the database.
+	 *
+	 * @param int    $user_id User ID.
+	 * @param string $meta_key Meta key.
+	 * @param string $default Default value.
+	 * @return string
+	 */
+	private function get_user_meta_value_direct( $user_id, $meta_key, $default = '' ) {
+		global $wpdb;
+
+		$value = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT meta_value
+				FROM {$wpdb->usermeta}
+				WHERE user_id = %d
+					AND meta_key = %s
+				ORDER BY umeta_id ASC
+				LIMIT 1",
+				$user_id,
+				$meta_key
+			)
+		);
+
+		return null === $value ? (string) $default : (string) $value;
+	}
+
+	/**
+	 * Read a decimal user meta value directly from the database.
+	 *
+	 * @param int    $user_id User ID.
+	 * @param string $meta_key Meta key.
+	 * @return float
+	 */
+	private function get_user_meta_decimal_direct( $user_id, $meta_key ) {
+		return (float) $this->get_user_meta_value_direct( $user_id, $meta_key, '0' );
+	}
+
+	/**
+	 * Insert or update a user meta value directly.
+	 *
+	 * @param int    $user_id User ID.
+	 * @param string $meta_key Meta key.
+	 * @param string $meta_value Meta value.
+	 */
+	private function upsert_user_meta_value( $user_id, $meta_key, $meta_value ) {
+		update_user_meta( $user_id, $meta_key, $meta_value );
+	}
+
+	/**
+	 * Format decimals without requiring WooCommerce helpers.
+	 *
+	 * @param float $value Value to format.
+	 * @param int   $decimals Number of decimals.
+	 * @return string
+	 */
+	private function format_decimal( $value, $decimals ) {
+		if ( function_exists( 'wc_format_decimal' ) ) {
+			return wc_format_decimal( $value, $decimals );
+		}
+
+		return number_format( (float) $value, (int) $decimals, '.', '' );
 	}
 }

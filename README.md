@@ -10,9 +10,11 @@ Network-activated WordPress multisite starter plugin for a global WooCommerce re
   - Email Settings
   - Points & Reward Settings
 - Configurable WooCommerce order status trigger for automatic reward awarding
+- Orders using coupon discounts are excluded from earning new reward points
 - Repeatable membership statuses with editable priority, spend threshold, and reward percentage
 - Multisite-aware frontend dashboard page creation with `[kd_bonus_dashboard]`
 - WooCommerce reward accrual based on eligible **product subtotal only**
+- Configurable reward expiry window that resets unused balances after the last reward deposit ages out
 - Membership progression based on **lifetime eligible spend**
 - Checkout balance display plus **partial or full** $KD redemption
 - Global transaction ledger table for reward history
