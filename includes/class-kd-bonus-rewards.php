@@ -1982,7 +1982,6 @@ class KD_Bonus_Rewards {
 
 		$per_page    = 200;
 		$page        = isset( $_GET['paged'] ) ? max( 1, absint( wp_unslash( $_GET['paged'] ) ) ) : 1; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
-		$offset      = ( $page - 1 ) * $per_page;
 		$total       = $this->get_reward_event_log_count();
 		$total_pages = max( 1, (int) ceil( $total / $per_page ) );
 		$page        = min( $page, $total_pages );
