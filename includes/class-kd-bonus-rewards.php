@@ -76,6 +76,11 @@ class KD_Bonus_Rewards {
 	const EVENT_LOG_PER_PAGE_OPTIONS = array( 10, 20, 40, 80, 160, 300, 500 );
 
 	/**
+	 * Network admin submenu slug for the reward event log page.
+	 */
+	const EVENT_LOG_SUBMENU_SLUG = 'kd-bonus-events';
+
+	/**
 	 * Network admin submenu slug for the users with rewards page.
 	 */
 	const USERS_WITH_REWARDS_SUBMENU_SLUG = 'kd-bonus-users-with-rewards';
@@ -350,7 +355,7 @@ class KD_Bonus_Rewards {
 			__( 'Reward Event Log', 'kd-bonus' ),
 			__( 'Reward Event Log', 'kd-bonus' ),
 			'manage_network_options',
-			'kd-bonus-events',
+			self::EVENT_LOG_SUBMENU_SLUG,
 			array( $this, 'render_event_log_page' )
 		);
 
@@ -2028,7 +2033,7 @@ class KD_Bonus_Rewards {
 			<h1><?php esc_html_e( 'KD Bonus Reward Event Log', 'kd-bonus' ); ?></h1>
 			<p><?php echo esc_html( sprintf( __( 'The plugin keeps the latest %d reward events and prunes older records automatically. Showing %d per page.', 'kd-bonus' ), self::MAX_EVENT_LOG_ROWS, $per_page ) ); ?></p>
 			<form method="get" class="tablenav top">
-				<input type="hidden" name="page" value="<?php echo esc_attr( sanitize_key( wp_unslash( $_GET['page'] ?? 'kd-bonus-events' ) ) ); ?>" />
+				<input type="hidden" name="page" value="<?php echo esc_attr( sanitize_key( wp_unslash( $_GET['page'] ?? self::EVENT_LOG_SUBMENU_SLUG ) ) ); ?>" />
 				<input type="hidden" name="paged" value="1" />
 				<div class="alignleft actions">
 					<label for="kd-bonus-event-log-per-page"><?php esc_html_e( 'Logs per page', 'kd-bonus' ); ?></label>
@@ -2108,7 +2113,7 @@ class KD_Bonus_Rewards {
 					<div class="tablenav-pages" style="margin: 16px 0;">
 						<?php
 						$pagination_base_args = array(
-							'page'     => sanitize_key( wp_unslash( $_GET['page'] ?? 'kd-bonus-events' ) ),
+							'page'     => sanitize_key( wp_unslash( $_GET['page'] ?? self::EVENT_LOG_SUBMENU_SLUG ) ),
 							'per_page' => $per_page,
 						);
 
