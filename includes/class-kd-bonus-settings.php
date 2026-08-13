@@ -903,15 +903,25 @@ class KD_Bonus_Settings {
 	private function render_event_log_tab() {
 		global $wpdb;
 
-		$table_name = KD_Bonus_Rewards::get_table_name();
-		$events     = $wpdb->get_results(
-			"SELECT id, user_id, site_id, order_id, type, amount, balance_after, currency, description, created_at
-			FROM {$table_name}
-			ORDER BY id DESC
-			LIMIT 200"
+		$table_name  = KD_Bonus_Rewards::get_table_name();
+		$per_page    = 200;
+		$page        = isset( $_GET['paged'] ) ? max( 1, absint( wp_unslash( $_GET['paged'] ) ) ) : 1; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		$total       = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table_name}" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		$total_pages = max( 1, (int) ceil( $total / $per_page ) );
+		$page        = min( $page, $total_pages );
+		$offset      = ( $page - 1 ) * $per_page;
+		$events      = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT id, user_id, site_id, order_id, type, amount, balance_after, currency, description, created_at
+				FROM {$table_name}
+				ORDER BY id DESC
+				LIMIT %d OFFSET %d",
+				$per_page,
+				$offset
+			)
 		); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
 		?>
-		<p><?php echo esc_html( sprintf( __( 'The reward event log keeps the latest %d events (older rows are pruned automatically). Showing newest 200 rows.', 'kd-bonus' ), KD_Bonus_Rewards::MAX_EVENT_LOG_ROWS ) ); ?></p>
+		<p><?php echo esc_html( sprintf( __( 'The reward event log keeps the latest %d events (older rows are pruned automatically). Showing %d per page.', 'kd-bonus' ), KD_Bonus_Rewards::MAX_EVENT_LOG_ROWS, $per_page ) ); ?></p>
 		<?php if ( empty( $events ) ) : ?>
 			<p><?php esc_html_e( 'No reward events recorded yet.', 'kd-bonus' ); ?></p>
 		<?php else : ?>
@@ -958,6 +968,26 @@ class KD_Bonus_Settings {
 					</tbody>
 				</table>
 			</div>
+			<?php if ( $total_pages > 1 ) : ?>
+				<div class="tablenav">
+					<div class="tablenav-pages" style="margin: 16px 0;">
+						<?php
+						echo wp_kses_post(
+							paginate_links(
+								array(
+									'base'      => add_query_arg( 'paged', '%#%' ),
+									'format'    => '',
+									'current'   => $page,
+									'total'     => $total_pages,
+									'prev_text' => __( '&laquo;', 'kd-bonus' ),
+									'next_text' => __( '&raquo;', 'kd-bonus' ),
+								)
+							)
+						);
+						?>
+					</div>
+				</div>
+			<?php endif; ?>
 		<?php endif; ?>
 		<?php
 	}

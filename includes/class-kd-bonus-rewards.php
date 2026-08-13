@@ -715,15 +715,17 @@ class KD_Bonus_Rewards {
 	/**
 	 * Read reward event log rows.
 	 *
-	 * @param int $limit Maximum number of rows.
+	 * @param int $limit   Maximum number of rows.
 	 * @param int $user_id Optional user filter.
+	 * @param int $offset  Number of rows to skip (for pagination).
 	 * @return array<int,object>
 	 */
-	public function get_reward_event_log( $limit = 20, $user_id = 0 ) {
+	public function get_reward_event_log( $limit = 20, $user_id = 0, $offset = 0 ) {
 		global $wpdb;
 
 		$table_name = self::get_table_name();
 		$limit      = max( 1, (int) $limit );
+		$offset     = max( 0, (int) $offset );
 
 		if ( $user_id > 0 ) {
 			$query = $wpdb->prepare(
@@ -731,21 +733,46 @@ class KD_Bonus_Rewards {
 				FROM {$table_name}
 				WHERE user_id = %d
 				ORDER BY id DESC
-				LIMIT %d",
+				LIMIT %d OFFSET %d",
 				$user_id,
-				$limit
+				$limit,
+				$offset
 			);
 		} else {
 			$query = $wpdb->prepare(
 				"SELECT id, user_id, site_id, order_id, type, amount, balance_after, currency, description, created_at
 				FROM {$table_name}
 				ORDER BY id DESC
-				LIMIT %d",
-				$limit
+				LIMIT %d OFFSET %d",
+				$limit,
+				$offset
 			);
 		}
 
 		return $wpdb->get_results( $query ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+	}
+
+	/**
+	 * Count reward event log rows.
+	 *
+	 * @param int $user_id Optional user filter.
+	 * @return int
+	 */
+	public function get_reward_event_log_count( $user_id = 0 ) {
+		global $wpdb;
+
+		$table_name = self::get_table_name();
+
+		if ( $user_id > 0 ) {
+			return (int) $wpdb->get_var(
+				$wpdb->prepare(
+					"SELECT COUNT(*) FROM {$table_name} WHERE user_id = %d",
+					$user_id
+				)
+			); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		}
+
+		return (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table_name}" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
 	}
 
 	/**
@@ -1953,7 +1980,14 @@ class KD_Bonus_Rewards {
 			wp_die( esc_html__( 'You do not have permission to view the KD Bonus reward event log.', 'kd-bonus' ) );
 		}
 
-		$events      = $this->get_reward_event_log( 200 );
+		$per_page    = 200;
+		$page        = isset( $_GET['paged'] ) ? max( 1, absint( wp_unslash( $_GET['paged'] ) ) ) : 1; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		$offset      = ( $page - 1 ) * $per_page;
+		$total       = $this->get_reward_event_log_count();
+		$total_pages = max( 1, (int) ceil( $total / $per_page ) );
+		$page        = min( $page, $total_pages );
+		$offset      = ( $page - 1 ) * $per_page;
+		$events      = $this->get_reward_event_log( $per_page, 0, $offset );
 		$event_users = array();
 
 		if ( ! empty( $events ) ) {
@@ -1967,7 +2001,7 @@ class KD_Bonus_Rewards {
 		?>
 		<div class="wrap">
 			<h1><?php esc_html_e( 'KD Bonus Reward Event Log', 'kd-bonus' ); ?></h1>
-			<p><?php echo esc_html( sprintf( __( 'The plugin keeps the latest %d reward events and prunes older records automatically. Showing the most recent 200 entries below.', 'kd-bonus' ), self::MAX_EVENT_LOG_ROWS ) ); ?></p>
+			<p><?php echo esc_html( sprintf( __( 'The plugin keeps the latest %d reward events and prunes older records automatically. Showing %d per page.', 'kd-bonus' ), self::MAX_EVENT_LOG_ROWS, $per_page ) ); ?></p>
 			<table class="widefat striped">
 				<thead>
 					<tr>
@@ -2029,6 +2063,26 @@ class KD_Bonus_Rewards {
 					<?php endif; ?>
 				</tbody>
 			</table>
+			<?php if ( $total_pages > 1 ) : ?>
+				<div class="tablenav">
+					<div class="tablenav-pages" style="margin: 16px 0;">
+						<?php
+						echo wp_kses_post(
+							paginate_links(
+								array(
+									'base'      => add_query_arg( 'paged', '%#%' ),
+									'format'    => '',
+									'current'   => $page,
+									'total'     => $total_pages,
+									'prev_text' => __( '&laquo;', 'kd-bonus' ),
+									'next_text' => __( '&raquo;', 'kd-bonus' ),
+								)
+							)
+						);
+						?>
+					</div>
+				</div>
+			<?php endif; ?>
 		</div>
 		<?php
 	}
