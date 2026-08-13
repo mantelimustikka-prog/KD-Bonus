@@ -66,6 +66,16 @@ class KD_Bonus_Rewards {
 	const MAX_EVENT_LOG_ROWS = 5000;
 
 	/**
+	 * Default number of reward event log rows shown per page.
+	 */
+	const EVENT_LOG_PER_PAGE_DEFAULT = 20;
+
+	/**
+	 * Allowed reward event log page sizes.
+	 */
+	const EVENT_LOG_PER_PAGE_OPTIONS = array( 10, 20, 40, 80, 160, 300, 500 );
+
+	/**
 	 * Network admin submenu slug for the users with rewards page.
 	 */
 	const USERS_WITH_REWARDS_SUBMENU_SLUG = 'kd-bonus-users-with-rewards';
@@ -773,6 +783,22 @@ class KD_Bonus_Rewards {
 		}
 
 		return (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table_name}" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+	}
+
+	/**
+	 * Sanitize the reward event log page size.
+	 *
+	 * @param mixed $per_page Requested page size.
+	 * @return int
+	 */
+	public static function sanitize_event_log_per_page( $per_page ) {
+		$per_page = absint( $per_page );
+
+		if ( ! in_array( $per_page, self::EVENT_LOG_PER_PAGE_OPTIONS, true ) ) {
+			return self::EVENT_LOG_PER_PAGE_DEFAULT;
+		}
+
+		return $per_page;
 	}
 
 	/**
@@ -1980,7 +2006,7 @@ class KD_Bonus_Rewards {
 			wp_die( esc_html__( 'You do not have permission to view the KD Bonus reward event log.', 'kd-bonus' ) );
 		}
 
-		$per_page    = 200;
+		$per_page    = self::sanitize_event_log_per_page( wp_unslash( $_GET['per_page'] ?? self::EVENT_LOG_PER_PAGE_DEFAULT ) ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
 		$page        = isset( $_GET['paged'] ) ? max( 1, absint( wp_unslash( $_GET['paged'] ) ) ) : 1; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
 		$total       = $this->get_reward_event_log_count();
 		$total_pages = max( 1, (int) ceil( $total / $per_page ) );
@@ -2001,6 +2027,21 @@ class KD_Bonus_Rewards {
 		<div class="wrap">
 			<h1><?php esc_html_e( 'KD Bonus Reward Event Log', 'kd-bonus' ); ?></h1>
 			<p><?php echo esc_html( sprintf( __( 'The plugin keeps the latest %d reward events and prunes older records automatically. Showing %d per page.', 'kd-bonus' ), self::MAX_EVENT_LOG_ROWS, $per_page ) ); ?></p>
+			<form method="get" class="tablenav top">
+				<input type="hidden" name="page" value="<?php echo esc_attr( sanitize_key( wp_unslash( $_GET['page'] ?? 'kd-bonus-events' ) ) ); ?>" />
+				<input type="hidden" name="paged" value="1" />
+				<div class="alignleft actions">
+					<label for="kd-bonus-event-log-per-page"><?php esc_html_e( 'Logs per page', 'kd-bonus' ); ?></label>
+					<select id="kd-bonus-event-log-per-page" name="per_page">
+						<?php foreach ( self::EVENT_LOG_PER_PAGE_OPTIONS as $page_size ) : ?>
+							<option value="<?php echo esc_attr( $page_size ); ?>" <?php selected( $per_page, $page_size ); ?>>
+								<?php echo esc_html( number_format_i18n( $page_size ) ); ?>
+							</option>
+						<?php endforeach; ?>
+					</select>
+					<?php submit_button( __( 'Apply', 'kd-bonus' ), 'secondary', '', false ); ?>
+				</div>
+			</form>
 			<table class="widefat striped">
 				<thead>
 					<tr>
@@ -2066,10 +2107,15 @@ class KD_Bonus_Rewards {
 				<div class="tablenav">
 					<div class="tablenav-pages" style="margin: 16px 0;">
 						<?php
+						$pagination_base_args = array(
+							'page'     => sanitize_key( wp_unslash( $_GET['page'] ?? 'kd-bonus-events' ) ),
+							'per_page' => $per_page,
+						);
+
 						echo wp_kses_post(
 							paginate_links(
 								array(
-									'base'      => add_query_arg( 'paged', '%#%' ),
+									'base'      => add_query_arg( array_merge( $pagination_base_args, array( 'paged' => '%#%' ) ) ),
 									'format'    => '',
 									'current'   => $page,
 									'total'     => $total_pages,
