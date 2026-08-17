@@ -2183,18 +2183,24 @@ class KD_Bonus_Rewards {
 				'meta_type'   => 'DECIMAL',
 				'blog_id'     => 0,
 				'meta_query'  => array(
-					'relation' => 'OR',
 					array(
 						'key'     => self::BALANCE_META,
-						'value'   => 0,
-						'compare' => '>',
-						'type'    => 'DECIMAL',
+						'compare' => 'EXISTS',
 					),
 					array(
-						'key'     => self::BALANCE_META,
-						'value'   => 0,
-						'compare' => '<',
-						'type'    => 'DECIMAL',
+						'relation' => 'OR',
+						array(
+							'key'     => self::BALANCE_META,
+							'value'   => 0,
+							'compare' => '>',
+							'type'    => 'DECIMAL',
+						),
+						array(
+							'key'     => self::BALANCE_META,
+							'value'   => 0,
+							'compare' => '<',
+							'type'    => 'DECIMAL',
+						),
 					),
 				),
 				'count_total' => true,
@@ -2252,6 +2258,7 @@ class KD_Bonus_Rewards {
 							$status_name       = is_array( $status ) && isset( $status['name'] ) ? $status['name'] : __( 'No status', 'kd-bonus' );
 							$lifetime_spend    = (float) $user_data['lifetime_spend'];
 							$last_activity     = $user_data['last_activity'];
+							$last_activity_at  = $last_activity ? strtotime( $last_activity->created_at . ' UTC' ) : false;
 							$first_name        = trim( (string) $user->first_name );
 							$last_name         = trim( (string) $user->last_name );
 							$user_name         = trim( implode( ' ', array_filter( array( $first_name, $last_name ) ) ) );
@@ -2274,8 +2281,8 @@ class KD_Bonus_Rewards {
 								<td>
 									<?php
 									echo esc_html(
-										$last_activity
-											? wp_date( $date_time_format, strtotime( $last_activity->created_at . ' UTC' ) )
+										$last_activity && false !== $last_activity_at
+											? wp_date( $date_time_format, $last_activity_at )
 											: '—'
 									);
 									?>
