@@ -2249,6 +2249,7 @@ class KD_Bonus_Rewards {
 							$user              = $user_data['user'];
 							$balance           = $user_data['balance'];
 							$status            = $user_data['status'];
+							$status_name       = is_array( $status ) && isset( $status['name'] ) ? $status['name'] : __( 'No status', 'kd-bonus' );
 							$lifetime_spend    = (float) $user_data['lifetime_spend'];
 							$last_activity     = $user_data['last_activity'];
 							$first_name        = trim( (string) $user->first_name );
@@ -2262,7 +2263,7 @@ class KD_Bonus_Rewards {
 							<tr>
 								<td><a href="<?php echo esc_url( $edit_profile_link ); ?>"><?php echo esc_html( $user_name ); ?></a></td>
 								<td><?php echo esc_html( number_format_i18n( $balance, $balance_decimals ) ); ?></td>
-								<td><?php echo esc_html( $status['name'] ?? __( 'No status', 'kd-bonus' ) ); ?></td>
+								<td><?php echo esc_html( $status_name ); ?></td>
 								<td>
 									<?php
 									echo esc_html(
