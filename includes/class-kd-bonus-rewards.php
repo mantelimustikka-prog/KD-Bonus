@@ -776,6 +776,43 @@ class KD_Bonus_Rewards {
 	}
 
 	/**
+	 * Read the latest reward activity row for each requested user.
+	 *
+	 * @param array<int,int> $user_ids User IDs.
+	 * @return array<int,object>
+	 */
+	private function get_latest_reward_activity_for_users( $user_ids ) {
+		global $wpdb;
+
+		$user_ids = array_values( array_filter( array_map( 'absint', $user_ids ) ) );
+		if ( empty( $user_ids ) ) {
+			return array();
+		}
+
+		$table_name   = self::get_table_name();
+		$placeholders = implode( ', ', array_fill( 0, count( $user_ids ), '%d' ) );
+		$query        = $wpdb->prepare(
+			"SELECT event.user_id, event.type, event.created_at
+			FROM {$table_name} AS event
+			INNER JOIN (
+				SELECT user_id, MAX(id) AS latest_id
+				FROM {$table_name}
+				WHERE user_id IN ({$placeholders})
+				GROUP BY user_id
+			) AS latest ON latest.latest_id = event.id",
+			$user_ids
+		);
+		$rows         = $wpdb->get_results( $query ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		$activities   = array();
+
+		foreach ( $rows as $row ) {
+			$activities[ (int) $row->user_id ] = $row;
+		}
+
+		return $activities;
+	}
+
+	/**
 	 * Get expiry information for a user.
 	 *
 	 * @param int $user_id User ID.
@@ -2146,18 +2183,24 @@ class KD_Bonus_Rewards {
 				'count_total' => true,
 			)
 		);
-		$users            = array();
-		foreach ( $users_query->get_results() as $user ) {
+		$query_results        = $users_query->get_results();
+		$latest_activity_rows = $this->get_latest_reward_activity_for_users( wp_list_pluck( $query_results, 'ID' ) );
+		$users                = array();
+		foreach ( $query_results as $user ) {
 			$balance = $this->get_balance( $user->ID );
 
 			$users[] = array(
-				'user'    => $user,
-				'balance' => $balance,
+				'user'           => $user,
+				'balance'        => $balance,
+				'status'         => $this->get_user_status( $user->ID ),
+				'lifetime_spend' => $this->get_lifetime_spend( $user->ID ),
+				'last_activity'  => $latest_activity_rows[ $user->ID ] ?? null,
 			);
 		}
 		$total_users      = (int) $users_query->get_total();
 		$total_pages      = max( 1, (int) ceil( $total_users / $per_page ) );
 		$balance_decimals = function_exists( 'wc_get_price_decimals' ) ? wc_get_price_decimals() : 2;
+		$base_currency    = $this->get_base_currency();
 		?>
 		<div class="wrap">
 			<h1><?php esc_html_e( 'Accounts with Rewards', 'kd-bonus' ); ?></h1>
@@ -2167,18 +2210,25 @@ class KD_Bonus_Rewards {
 					<tr>
 						<th><?php esc_html_e( 'Name', 'kd-bonus' ); ?></th>
 						<th><?php esc_html_e( 'Balance', 'kd-bonus' ); ?></th>
+						<th><?php esc_html_e( 'Membership Status', 'kd-bonus' ); ?></th>
+						<th><?php esc_html_e( 'Lifetime Eligible Spend', 'kd-bonus' ); ?></th>
+						<th><?php esc_html_e( 'Last Reward Activity Date', 'kd-bonus' ); ?></th>
+						<th><?php esc_html_e( 'Last Reward Event Type', 'kd-bonus' ); ?></th>
 					</tr>
 				</thead>
 				<tbody>
 					<?php if ( empty( $users ) ) : ?>
 						<tr>
-							<td colspan="2"><?php esc_html_e( 'No users currently have a non-zero reward balance.', 'kd-bonus' ); ?></td>
+							<td colspan="6"><?php esc_html_e( 'No users currently have a non-zero reward balance.', 'kd-bonus' ); ?></td>
 						</tr>
 					<?php else : ?>
 						<?php foreach ( $users as $user_data ) : ?>
 							<?php
 							$user              = $user_data['user'];
 							$balance           = $user_data['balance'];
+							$status            = $user_data['status'];
+							$lifetime_spend    = (float) $user_data['lifetime_spend'];
+							$last_activity     = $user_data['last_activity'];
 							$first_name        = trim( (string) $user->first_name );
 							$last_name         = trim( (string) $user->last_name );
 							$user_name         = trim( $first_name . ' ' . $last_name );
@@ -2190,6 +2240,24 @@ class KD_Bonus_Rewards {
 							<tr>
 								<td><a href="<?php echo esc_url( $edit_profile_link ); ?>"><?php echo esc_html( $user_name ); ?></a></td>
 								<td><?php echo esc_html( number_format_i18n( $balance, $balance_decimals ) ); ?></td>
+								<td><?php echo esc_html( $status['name'] ?? __( 'No status', 'kd-bonus' ) ); ?></td>
+								<td>
+									<?php
+									echo esc_html(
+										number_format_i18n( $lifetime_spend, 2 ) . ( '' !== $base_currency ? ' ' . $base_currency : '' )
+									);
+									?>
+								</td>
+								<td>
+									<?php
+									echo esc_html(
+										$last_activity
+											? wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), strtotime( $last_activity->created_at . ' UTC' ) )
+											: '—'
+									);
+									?>
+								</td>
+								<td><?php echo esc_html( $last_activity ? ucwords( str_replace( '_', ' ', $last_activity->type ) ) : '—' ); ?></td>
 							</tr>
 						<?php endforeach; ?>
 					<?php endif; ?>
