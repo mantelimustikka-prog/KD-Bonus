@@ -924,6 +924,11 @@ class KD_Bonus_Settings {
 				$offset
 			)
 		); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		$event_users = array();
+
+		if ( ! empty( $events ) ) {
+			$event_users = KD_Bonus_Rewards::get_network_users_by_ids( wp_list_pluck( $events, 'user_id' ) );
+		}
 		?>
 		<p><?php echo esc_html( sprintf( __( 'The reward event log keeps the latest %d events (older rows are pruned automatically). Showing %d per page.', 'kd-bonus' ), KD_Bonus_Rewards::MAX_EVENT_LOG_ROWS, $per_page ) ); ?></p>
 
@@ -961,17 +966,13 @@ class KD_Bonus_Settings {
 					</thead>
 					<tbody>
 						<?php foreach ( $events as $event ) : ?>
-							<?php $user = get_userdata( (int) $event->user_id ); ?>
+							<?php $user = $event_users[ (int) $event->user_id ] ?? null; ?>
 							<tr>
 								<td><?php echo esc_html( (string) $event->id ); ?></td>
 								<td><?php echo esc_html( wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), strtotime( $event->created_at . ' UTC' ) ) ); ?></td>
 								<td>
 									<?php
-									echo esc_html(
-										$user
-										? sprintf( '%1$s (%2$s)', $user->user_login, $user->user_email )
-										: sprintf( __( 'User #%d', 'kd-bonus' ), (int) $event->user_id )
-									);
+									echo esc_html( KD_Bonus_Rewards::format_reward_event_user_label( $user, (int) $event->user_id ) );
 									?>
 								</td>
 								<td><?php echo esc_html( (string) $event->site_id ); ?></td>

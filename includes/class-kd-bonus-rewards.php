@@ -396,6 +396,43 @@ class KD_Bonus_Rewards {
 	}
 
 	/**
+	 * Fetch users by ID from the full network user table.
+	 *
+	 * @param array<int,int> $user_ids User IDs.
+	 * @return array<int,WP_User>
+	 */
+	public static function get_network_users_by_ids( $user_ids ) {
+		$user_ids = array_values( array_unique( array_filter( array_map( 'absint', $user_ids ) ) ) );
+		if ( empty( $user_ids ) ) {
+			return array();
+		}
+
+		$users = array();
+		foreach ( get_users( array( 'include' => $user_ids, 'blog_id' => 0 ) ) as $user ) {
+			if ( $user instanceof WP_User ) {
+				$users[ $user->ID ] = $user;
+			}
+		}
+
+		return $users;
+	}
+
+	/**
+	 * Format a reward event user label consistently.
+	 *
+	 * @param WP_User|null $user    User object, when available.
+	 * @param int          $user_id User ID.
+	 * @return string
+	 */
+	public static function format_reward_event_user_label( $user, $user_id ) {
+		if ( $user instanceof WP_User ) {
+			return sprintf( '%1$s (%2$s)', $user->user_login, $user->user_email );
+		}
+
+		return sprintf( __( 'User #%d', 'kd-bonus' ), (int) $user_id );
+	}
+
+	/**
 	 * Get global reward balance.
 	 *
 	 * @param int $user_id User ID.
@@ -821,6 +858,81 @@ class KD_Bonus_Rewards {
 		}
 
 		return $activities;
+	}
+
+	/**
+	 * Count network users with a non-zero stored reward balance.
+	 *
+	 * @return int
+	 */
+	private function get_users_with_rewards_total_count() {
+		global $wpdb;
+
+		$latest_balance_subquery = $this->get_latest_balance_meta_subquery();
+
+		return (int) $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT COUNT(*)
+				FROM {$wpdb->usermeta} AS usermeta
+				INNER JOIN ({$latest_balance_subquery}) AS latest_balance ON latest_balance.latest_umeta_id = usermeta.umeta_id
+				INNER JOIN {$wpdb->users} AS users ON users.ID = usermeta.user_id
+				WHERE usermeta.meta_key = %s
+					AND CAST(usermeta.meta_value AS DECIMAL(18,4)) <> 0",
+				self::BALANCE_META,
+				self::BALANCE_META
+			)
+		);
+	}
+
+	/**
+	 * Read one page of network users with a non-zero stored reward balance.
+	 *
+	 * @param int $per_page Page size.
+	 * @param int $page     Current page number.
+	 * @return array<int,int>
+	 */
+	private function get_users_with_rewards_page_user_ids( $per_page, $page ) {
+		global $wpdb;
+
+		$per_page = max( 1, (int) $per_page );
+		$offset   = max( 0, ( max( 1, (int) $page ) - 1 ) * $per_page );
+		$latest_balance_subquery = $this->get_latest_balance_meta_subquery();
+		$rows     = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT usermeta.user_id
+				FROM {$wpdb->usermeta} AS usermeta
+				INNER JOIN ({$latest_balance_subquery}) AS latest_balance ON latest_balance.latest_umeta_id = usermeta.umeta_id
+				INNER JOIN {$wpdb->users} AS users ON users.ID = usermeta.user_id
+				WHERE usermeta.meta_key = %s
+					AND CAST(usermeta.meta_value AS DECIMAL(18,4)) <> 0
+				ORDER BY CAST(usermeta.meta_value AS DECIMAL(18,4)) DESC, usermeta.user_id ASC
+				LIMIT %d OFFSET %d",
+				self::BALANCE_META,
+				self::BALANCE_META,
+				$per_page,
+				$offset
+			)
+		);
+
+		return array_map( 'absint', wp_list_pluck( $rows, 'user_id' ) );
+	}
+
+	/**
+	 * Build the subquery that resolves each user's latest stored balance meta row.
+	 *
+	 * update_user_meta() rewrites a single current value, and usermeta IDs are
+	 * auto-incremented, so MAX(umeta_id) gives the newest stored kd_bonus_balance
+	 * row when duplicate rows exist from older data.
+	 *
+	 * @return string
+	 */
+	private function get_latest_balance_meta_subquery() {
+		global $wpdb;
+
+		return "SELECT user_id, MAX(umeta_id) AS latest_umeta_id
+			FROM {$wpdb->usermeta}
+			WHERE meta_key = %s
+			GROUP BY user_id";
 	}
 
 	/**
@@ -2052,14 +2164,8 @@ class KD_Bonus_Rewards {
 		$event_users = array();
 
 		if ( ! empty( $events ) ) {
-			$user_ids = array_values( array_unique( array_map( 'absint', wp_list_pluck( $events, 'user_id' ) ) ) );
-			// Use blog_id => 0 to fetch users from all sites in the network so the
-			// User column always resolves login + email consistently.
-			foreach ( get_users( array( 'include' => $user_ids, 'blog_id' => 0 ) ) as $event_user ) {
-				if ( $event_user instanceof WP_User ) {
-					$event_users[ $event_user->ID ] = $event_user;
-				}
-			}
+			$user_ids    = array_values( array_unique( array_map( 'absint', wp_list_pluck( $events, 'user_id' ) ) ) );
+			$event_users = self::get_network_users_by_ids( $user_ids );
 		}
 		?>
 		<div class="wrap">
@@ -2103,11 +2209,7 @@ class KD_Bonus_Rewards {
 								<td><?php echo esc_html( wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), strtotime( $event->created_at . ' UTC' ) ) ); ?></td>
 								<td>
 									<?php
-									echo esc_html(
-										$event_user instanceof WP_User
-											? sprintf( '%1$s (%2$s)', $event_user->user_login, $event_user->user_email )
-											: sprintf( '#%d', $event->user_id )
-									);
+									echo esc_html( self::format_reward_event_user_label( $event_user, (int) $event->user_id ) );
 									?>
 								</td>
 								<td><?php echo esc_html( $this->format_reward_event_type_label( $event->type ) ); ?></td>
@@ -2174,41 +2276,23 @@ class KD_Bonus_Rewards {
 
 		$page        = isset( $_GET['paged'] ) ? max( 1, absint( wp_unslash( $_GET['paged'] ) ) ) : 1;
 		$per_page    = self::USERS_WITH_REWARDS_PER_PAGE;
-		$users_query = new WP_User_Query(
-			array(
-				'number'      => $per_page,
-				'offset'      => ( $page - 1 ) * $per_page,
-				'orderby'     => 'meta_value_num',
-				'order'       => 'DESC',
-				'meta_key'    => self::BALANCE_META,
-				'meta_type'   => 'DECIMAL',
-				'blog_id'     => 0,
-				'meta_query'  => array(
-					array(
-						'key'     => self::BALANCE_META,
-						'compare' => 'EXISTS',
-					),
-					array(
-						'relation' => 'OR',
-						array(
-							'key'     => self::BALANCE_META,
-							'value'   => 0,
-							'compare' => '>',
-							'type'    => 'DECIMAL',
-						),
-						array(
-							'key'     => self::BALANCE_META,
-							'value'   => 0,
-							'compare' => '<',
-							'type'    => 'DECIMAL',
-						),
-					),
-				),
-				'count_total' => true,
-			)
-		);
-		$query_results = $users_query->get_results();
-		$user_ids      = wp_list_pluck( $query_results, 'ID' );
+		$total_users = $this->get_users_with_rewards_total_count();
+		$total_pages = max( 1, (int) ceil( $total_users / $per_page ) );
+		$page        = min( $page, $total_pages );
+		$user_ids    = array();
+
+		if ( $total_users > 0 ) {
+			$user_ids = $this->get_users_with_rewards_page_user_ids( $per_page, $page );
+		}
+		$user_map    = self::get_network_users_by_ids( $user_ids );
+		$query_results = array();
+
+		foreach ( $user_ids as $user_id ) {
+			if ( isset( $user_map[ $user_id ] ) ) {
+				$query_results[] = $user_map[ $user_id ];
+			}
+		}
+
 		if ( ! empty( $user_ids ) ) {
 			update_meta_cache( 'user', $user_ids );
 		}
@@ -2225,8 +2309,6 @@ class KD_Bonus_Rewards {
 				'last_activity'  => $latest_activity_rows[ $user->ID ] ?? null,
 			);
 		}
-		$total_users      = (int) $users_query->get_total();
-		$total_pages      = max( 1, (int) ceil( $total_users / $per_page ) );
 		$balance_decimals = function_exists( 'wc_get_price_decimals' ) ? wc_get_price_decimals() : 2;
 		$base_currency    = $this->get_base_currency();
 		$date_time_format = get_option( 'date_format' ) . ' ' . get_option( 'time_format' );
