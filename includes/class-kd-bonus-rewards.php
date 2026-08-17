@@ -626,6 +626,16 @@ class KD_Bonus_Rewards {
 	}
 
 	/**
+	 * Format a reward event type label for display.
+	 *
+	 * @param string $type Event type key.
+	 * @return string
+	 */
+	private function format_reward_event_type_label( $type ) {
+		return ucwords( str_replace( '_', ' ', (string) $type ) );
+	}
+
+	/**
 	 * Format reward amount for the Network Admin users column.
 	 *
 	 * @param float $amount Amount in base reward currency.
@@ -1226,7 +1236,7 @@ class KD_Bonus_Rewards {
 									<?php foreach ( $history as $entry ) : ?>
 										<tr>
 											<td><?php echo esc_html( wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), strtotime( $entry->created_at . ' UTC' ) ) ); ?></td>
-											<td><?php echo esc_html( ucwords( str_replace( '_', ' ', $entry->type ) ) ); ?></td>
+											<td><?php echo esc_html( $this->format_reward_event_type_label( $entry->type ) ); ?></td>
 											<td><?php echo esc_html( $this->format_reward_amount( (float) $entry->amount ) ); ?></td>
 											<td><?php echo esc_html( $this->format_reward_amount( (float) $entry->balance_after ) ); ?></td>
 											<td>
@@ -2099,7 +2109,7 @@ class KD_Bonus_Rewards {
 									);
 									?>
 								</td>
-								<td><?php echo esc_html( ucwords( str_replace( '_', ' ', $event->type ) ) ); ?></td>
+								<td><?php echo esc_html( $this->format_reward_event_type_label( $event->type ) ); ?></td>
 								<td><?php echo esc_html( $this->format_reward_amount( (float) $event->amount ) ); ?></td>
 								<td><?php echo esc_html( $this->format_reward_amount( (float) $event->balance_after ) ); ?></td>
 								<td><?php echo esc_html( $event->order_id ? '#' . (int) $event->order_id : '—' ); ?></td>
@@ -2183,8 +2193,12 @@ class KD_Bonus_Rewards {
 				'count_total' => true,
 			)
 		);
-		$query_results        = $users_query->get_results();
-		$latest_activity_rows = $this->get_latest_reward_activity_for_users( wp_list_pluck( $query_results, 'ID' ) );
+		$query_results = $users_query->get_results();
+		$user_ids      = wp_list_pluck( $query_results, 'ID' );
+		if ( ! empty( $user_ids ) ) {
+			update_meta_cache( 'user', $user_ids );
+		}
+		$latest_activity_rows = $this->get_latest_reward_activity_for_users( $user_ids );
 		$users                = array();
 		foreach ( $query_results as $user ) {
 			$balance = $this->get_balance( $user->ID );
@@ -2258,7 +2272,7 @@ class KD_Bonus_Rewards {
 									);
 									?>
 								</td>
-								<td><?php echo esc_html( $last_activity ? ucwords( str_replace( '_', ' ', $last_activity->type ) ) : '—' ); ?></td>
+								<td><?php echo esc_html( $last_activity ? $this->format_reward_event_type_label( $last_activity->type ) : '—' ); ?></td>
 							</tr>
 						<?php endforeach; ?>
 					<?php endif; ?>
