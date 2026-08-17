@@ -809,8 +809,9 @@ class KD_Bonus_Rewards {
 				FROM {$table_name}
 				WHERE user_id IN ({$placeholders})
 				GROUP BY user_id
-			) AS latest ON latest.latest_id = event.id",
-			$user_ids
+			) AS latest ON latest.latest_id = event.id
+			WHERE event.user_id IN ({$placeholders})",
+			array_merge( $user_ids, $user_ids )
 		);
 		$rows         = $wpdb->get_results( $query ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
 		$activities   = array();
