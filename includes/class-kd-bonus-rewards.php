@@ -346,8 +346,8 @@ class KD_Bonus_Rewards {
 
 		add_submenu_page(
 			KD_Bonus_Settings::MENU_SLUG,
-			__( 'Users with Rewards', 'kd-bonus' ),
-			__( 'Users with Rewards', 'kd-bonus' ),
+			__( 'Accounts with Rewards', 'kd-bonus' ),
+			__( 'Accounts with Rewards', 'kd-bonus' ),
 			'manage_network_options',
 			self::USERS_WITH_REWARDS_SUBMENU_SLUG,
 			array( $this, 'render_users_with_rewards_page' )
@@ -626,6 +626,16 @@ class KD_Bonus_Rewards {
 	}
 
 	/**
+	 * Format a reward event type label for display.
+	 *
+	 * @param string $type Event type key.
+	 * @return string
+	 */
+	private function format_reward_event_type_label( $type ) {
+		return ucwords( str_replace( '_', ' ', (string) $type ) );
+	}
+
+	/**
 	 * Format reward amount for the Network Admin users column.
 	 *
 	 * @param float $amount Amount in base reward currency.
@@ -773,6 +783,44 @@ class KD_Bonus_Rewards {
 		}
 
 		return (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table_name}" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+	}
+
+	/**
+	 * Read the latest reward activity row for each requested user.
+	 *
+	 * @param array<int,int> $user_ids User IDs.
+	 * @return array<int,object>
+	 */
+	private function get_latest_reward_activity_for_users( $user_ids ) {
+		global $wpdb;
+
+		$user_ids = array_values( array_filter( array_map( 'absint', $user_ids ) ) );
+		if ( empty( $user_ids ) ) {
+			return array();
+		}
+
+		$table_name   = self::get_table_name();
+		$placeholders = implode( ', ', array_fill( 0, count( $user_ids ), '%d' ) );
+		$query        = $wpdb->prepare(
+			"SELECT event.user_id, event.type, event.created_at
+			FROM {$table_name} AS event
+			INNER JOIN (
+				SELECT user_id, MAX(id) AS latest_id
+				FROM {$table_name}
+				WHERE user_id IN ({$placeholders})
+				GROUP BY user_id
+			) AS latest ON latest.latest_id = event.id
+			WHERE event.user_id IN ({$placeholders})",
+			array_merge( $user_ids, $user_ids )
+		);
+		$rows         = $wpdb->get_results( $query ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		$activities   = array();
+
+		foreach ( $rows as $row ) {
+			$activities[ (int) $row->user_id ] = $row;
+		}
+
+		return $activities;
 	}
 
 	/**
@@ -1189,7 +1237,7 @@ class KD_Bonus_Rewards {
 									<?php foreach ( $history as $entry ) : ?>
 										<tr>
 											<td><?php echo esc_html( wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), strtotime( $entry->created_at . ' UTC' ) ) ); ?></td>
-											<td><?php echo esc_html( ucwords( str_replace( '_', ' ', $entry->type ) ) ); ?></td>
+											<td><?php echo esc_html( $this->format_reward_event_type_label( $entry->type ) ); ?></td>
 											<td><?php echo esc_html( $this->format_reward_amount( (float) $entry->amount ) ); ?></td>
 											<td><?php echo esc_html( $this->format_reward_amount( (float) $entry->balance_after ) ); ?></td>
 											<td>
@@ -2062,7 +2110,7 @@ class KD_Bonus_Rewards {
 									);
 									?>
 								</td>
-								<td><?php echo esc_html( ucwords( str_replace( '_', ' ', $event->type ) ) ); ?></td>
+								<td><?php echo esc_html( $this->format_reward_event_type_label( $event->type ) ); ?></td>
 								<td><?php echo esc_html( $this->format_reward_amount( (float) $event->amount ) ); ?></td>
 								<td><?php echo esc_html( $this->format_reward_amount( (float) $event->balance_after ) ); ?></td>
 								<td><?php echo esc_html( $event->order_id ? '#' . (int) $event->order_id : '—' ); ?></td>
@@ -2117,11 +2165,11 @@ class KD_Bonus_Rewards {
 	}
 
 	/**
-	 * Render the network-wide users with rewards page.
+	 * Render the network-wide accounts with rewards page.
 	 */
 	public function render_users_with_rewards_page() {
 		if ( ! current_user_can( 'manage_network_options' ) ) {
-			wp_die( esc_html__( 'You do not have permission to view users with rewards.', 'kd-bonus' ) );
+			wp_die( esc_html__( 'You do not have permission to view accounts with rewards.', 'kd-bonus' ) );
 		}
 
 		$page        = isset( $_GET['paged'] ) ? max( 1, absint( wp_unslash( $_GET['paged'] ) ) ) : 1;
@@ -2138,56 +2186,109 @@ class KD_Bonus_Rewards {
 				'meta_query'  => array(
 					array(
 						'key'     => self::BALANCE_META,
-						'value'   => 0,
-						'compare' => '>',
-						'type'    => 'DECIMAL',
+						'compare' => 'EXISTS',
+					),
+					array(
+						'relation' => 'OR',
+						array(
+							'key'     => self::BALANCE_META,
+							'value'   => 0,
+							'compare' => '>',
+							'type'    => 'DECIMAL',
+						),
+						array(
+							'key'     => self::BALANCE_META,
+							'value'   => 0,
+							'compare' => '<',
+							'type'    => 'DECIMAL',
+						),
 					),
 				),
 				'count_total' => true,
 			)
 		);
-		$users            = array();
-		foreach ( $users_query->get_results() as $user ) {
+		$query_results = $users_query->get_results();
+		$user_ids      = wp_list_pluck( $query_results, 'ID' );
+		if ( ! empty( $user_ids ) ) {
+			update_meta_cache( 'user', $user_ids );
+		}
+		$latest_activity_rows = $this->get_latest_reward_activity_for_users( $user_ids );
+		$users                = array();
+		foreach ( $query_results as $user ) {
 			$balance = $this->get_balance( $user->ID );
 
 			$users[] = array(
-				'user'    => $user,
-				'balance' => $balance,
+				'user'           => $user,
+				'balance'        => $balance,
+				'status'         => $this->get_user_status( $user->ID ),
+				'lifetime_spend' => $this->get_lifetime_spend( $user->ID ),
+				'last_activity'  => $latest_activity_rows[ $user->ID ] ?? null,
 			);
 		}
 		$total_users      = (int) $users_query->get_total();
 		$total_pages      = max( 1, (int) ceil( $total_users / $per_page ) );
-		$currency         = $this->get_base_currency();
 		$balance_decimals = function_exists( 'wc_get_price_decimals' ) ? wc_get_price_decimals() : 2;
+		$base_currency    = $this->get_base_currency();
+		$date_time_format = get_option( 'date_format' ) . ' ' . get_option( 'time_format' );
 		?>
 		<div class="wrap">
-			<h1><?php esc_html_e( 'Users with Rewards', 'kd-bonus' ); ?></h1>
-			<p><?php esc_html_e( 'Showing users with a reward balance greater than zero.', 'kd-bonus' ); ?></p>
+			<h1><?php esc_html_e( 'Accounts with Rewards', 'kd-bonus' ); ?></h1>
+			<p><?php esc_html_e( 'Showing network users with reward balances above or below zero. Positive balances are listed first.', 'kd-bonus' ); ?></p>
 			<table class="widefat striped">
 				<thead>
 					<tr>
 						<th><?php esc_html_e( 'Name', 'kd-bonus' ); ?></th>
 						<th><?php esc_html_e( 'Balance', 'kd-bonus' ); ?></th>
-						<th><?php esc_html_e( 'Currency', 'kd-bonus' ); ?></th>
+						<th><?php esc_html_e( 'Membership Status', 'kd-bonus' ); ?></th>
+						<th><?php esc_html_e( 'Lifetime Eligible Spend', 'kd-bonus' ); ?></th>
+						<th><?php esc_html_e( 'Last Reward Activity Date', 'kd-bonus' ); ?></th>
+						<th><?php esc_html_e( 'Last Reward Event Type', 'kd-bonus' ); ?></th>
 					</tr>
 				</thead>
 				<tbody>
 					<?php if ( empty( $users ) ) : ?>
 						<tr>
-							<td colspan="3"><?php esc_html_e( 'No users currently have a reward balance above zero.', 'kd-bonus' ); ?></td>
+							<td colspan="6"><?php esc_html_e( 'No users currently have a non-zero reward balance.', 'kd-bonus' ); ?></td>
 						</tr>
 					<?php else : ?>
 						<?php foreach ( $users as $user_data ) : ?>
 							<?php
 							$user              = $user_data['user'];
 							$balance           = $user_data['balance'];
-							$user_name         = '' !== $user->display_name ? $user->display_name : sprintf( __( 'User #%d', 'kd-bonus' ), $user->ID );
+							$status            = $user_data['status'];
+							$status_name       = is_array( $status ) && isset( $status['name'] ) ? $status['name'] : __( 'No status', 'kd-bonus' );
+							$lifetime_spend    = (float) $user_data['lifetime_spend'];
+							$last_activity     = $user_data['last_activity'];
+							$last_activity_at  = $last_activity ? strtotime( $last_activity->created_at . ' UTC' ) : false;
+							$first_name        = trim( (string) $user->first_name );
+							$last_name         = trim( (string) $user->last_name );
+							$user_name         = trim( implode( ' ', array_filter( array( $first_name, $last_name ) ) ) );
+							if ( '' === $user_name ) {
+								$user_name = '' !== $user->display_name ? $user->display_name : sprintf( __( 'User #%d', 'kd-bonus' ), $user->ID );
+							}
 							$edit_profile_link = network_admin_url( 'user-edit.php?user_id=' . $user->ID );
 							?>
 							<tr>
 								<td><a href="<?php echo esc_url( $edit_profile_link ); ?>"><?php echo esc_html( $user_name ); ?></a></td>
 								<td><?php echo esc_html( number_format_i18n( $balance, $balance_decimals ) ); ?></td>
-								<td><?php echo esc_html( '' !== $currency ? $currency : '—' ); ?></td>
+								<td><?php echo esc_html( $status_name ); ?></td>
+								<td>
+									<?php
+									echo esc_html(
+										number_format_i18n( $lifetime_spend, 2 ) . ( '' !== $base_currency ? ' ' . $base_currency : '' )
+									);
+									?>
+								</td>
+								<td>
+									<?php
+									echo esc_html(
+										$last_activity && false !== $last_activity_at
+											? wp_date( $date_time_format, $last_activity_at )
+											: '—'
+									);
+									?>
+								</td>
+								<td><?php echo esc_html( $last_activity ? $this->format_reward_event_type_label( $last_activity->type ) : '—' ); ?></td>
 							</tr>
 						<?php endforeach; ?>
 					<?php endif; ?>
