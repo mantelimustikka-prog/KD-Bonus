@@ -1446,6 +1446,16 @@ class KD_Bonus_Rewards {
 		$order->update_meta_data( '_kd_bonus_redemption_base', $base_amount );
 		$order->update_meta_data( '_kd_bonus_redemption_amount', $this->convert_from_base( $base_amount, $current_currency, array( 'context' => 'order_meta' ) ) );
 		$order->update_meta_data( '_kd_bonus_redemption_currency', $current_currency );
+
+		// Deduct balance and log the usage event immediately so checkout redemptions
+		// appear in the Reward Event Log as negative entries even before the order
+		// reaches the award status. settle_redemption_for_order() reads meta from the
+		// in-memory order object, so the values set above via update_meta_data() are
+		// available without a prior save().
+		$user_id = (int) $order->get_user_id();
+		if ( $user_id > 0 ) {
+			$this->settle_redemption_for_order( $order, $user_id );
+		}
 	}
 
 	/**
@@ -1980,7 +1990,11 @@ class KD_Bonus_Rewards {
 			wp_die( esc_html__( 'You do not have permission to view the KD Bonus reward event log.', 'kd-bonus' ) );
 		}
 
-		$per_page    = 200;
+		$allowed_per_page = array( 10, 20, 40, 80, 160, 300, 500 );
+		$per_page         = isset( $_GET['per_page'] ) ? absint( wp_unslash( $_GET['per_page'] ) ) : 300; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		if ( ! in_array( $per_page, $allowed_per_page, true ) ) {
+			$per_page = 300;
+		}
 		$page        = isset( $_GET['paged'] ) ? max( 1, absint( wp_unslash( $_GET['paged'] ) ) ) : 1; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
 		$total       = $this->get_reward_event_log_count();
 		$total_pages = max( 1, (int) ceil( $total / $per_page ) );
@@ -1991,7 +2005,9 @@ class KD_Bonus_Rewards {
 
 		if ( ! empty( $events ) ) {
 			$user_ids = array_values( array_unique( array_map( 'absint', wp_list_pluck( $events, 'user_id' ) ) ) );
-			foreach ( get_users( array( 'include' => $user_ids ) ) as $event_user ) {
+			// Use blog_id => 0 to fetch users from all sites in the network so the
+			// User column always resolves login + email consistently.
+			foreach ( get_users( array( 'include' => $user_ids, 'blog_id' => 0 ) ) as $event_user ) {
 				if ( $event_user instanceof WP_User ) {
 					$event_users[ $event_user->ID ] = $event_user;
 				}
@@ -2001,6 +2017,20 @@ class KD_Bonus_Rewards {
 		<div class="wrap">
 			<h1><?php esc_html_e( 'KD Bonus Reward Event Log', 'kd-bonus' ); ?></h1>
 			<p><?php echo esc_html( sprintf( __( 'The plugin keeps the latest %d reward events and prunes older records automatically. Showing %d per page.', 'kd-bonus' ), self::MAX_EVENT_LOG_ROWS, $per_page ) ); ?></p>
+
+			<form method="get" style="margin: 12px 0 16px;">
+				<input type="hidden" name="page" value="<?php echo esc_attr( isset( $_GET['page'] ) ? sanitize_text_field( wp_unslash( $_GET['page'] ) ) : '' ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended ?>">
+				<label for="kd-bonus-per-page"><?php esc_html_e( 'Logs per page:', 'kd-bonus' ); ?></label>
+				<select id="kd-bonus-per-page" name="per_page" onchange="this.form.submit()">
+					<?php foreach ( $allowed_per_page as $option ) : ?>
+						<option value="<?php echo esc_attr( $option ); ?>" <?php selected( $per_page, $option ); ?>>
+							<?php echo esc_html( number_format_i18n( $option ) ); ?>
+						</option>
+					<?php endforeach; ?>
+				</select>
+				<input type="hidden" name="paged" value="1">
+			</form>
+
 			<table class="widefat striped">
 				<thead>
 					<tr>
@@ -2069,7 +2099,7 @@ class KD_Bonus_Rewards {
 						echo wp_kses_post(
 							paginate_links(
 								array(
-									'base'      => add_query_arg( 'paged', '%#%' ),
+									'base'      => add_query_arg( array( 'per_page' => $per_page, 'paged' => '%#%' ) ),
 									'format'    => '',
 									'current'   => $page,
 									'total'     => $total_pages,
@@ -2104,6 +2134,7 @@ class KD_Bonus_Rewards {
 				'order'       => 'DESC',
 				'meta_key'    => self::BALANCE_META,
 				'meta_type'   => 'DECIMAL',
+				'blog_id'     => 0,
 				'meta_query'  => array(
 					array(
 						'key'     => self::BALANCE_META,
@@ -2118,9 +2149,6 @@ class KD_Bonus_Rewards {
 		$users            = array();
 		foreach ( $users_query->get_results() as $user ) {
 			$balance = $this->get_balance( $user->ID );
-			if ( $balance <= 0 ) {
-				continue;
-			}
 
 			$users[] = array(
 				'user'    => $user,
@@ -2138,7 +2166,7 @@ class KD_Bonus_Rewards {
 			<table class="widefat striped">
 				<thead>
 					<tr>
-						<th><?php esc_html_e( 'User\u2019s real name', 'kd-bonus' ); ?></th>
+						<th><?php esc_html_e( 'Name', 'kd-bonus' ); ?></th>
 						<th><?php esc_html_e( 'Balance', 'kd-bonus' ); ?></th>
 						<th><?php esc_html_e( 'Currency', 'kd-bonus' ); ?></th>
 					</tr>

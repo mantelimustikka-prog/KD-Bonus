@@ -903,8 +903,12 @@ class KD_Bonus_Settings {
 	private function render_event_log_tab() {
 		global $wpdb;
 
-		$table_name  = KD_Bonus_Rewards::get_table_name();
-		$per_page    = 200;
+		$table_name       = KD_Bonus_Rewards::get_table_name();
+		$allowed_per_page = array( 10, 20, 40, 80, 160, 300, 500 );
+		$per_page         = isset( $_GET['per_page'] ) ? absint( wp_unslash( $_GET['per_page'] ) ) : 300; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		if ( ! in_array( $per_page, $allowed_per_page, true ) ) {
+			$per_page = 300;
+		}
 		$page        = isset( $_GET['paged'] ) ? max( 1, absint( wp_unslash( $_GET['paged'] ) ) ) : 1; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
 		$total       = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table_name}" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
 		$total_pages = max( 1, (int) ceil( $total / $per_page ) );
@@ -922,6 +926,20 @@ class KD_Bonus_Settings {
 		); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
 		?>
 		<p><?php echo esc_html( sprintf( __( 'The reward event log keeps the latest %d events (older rows are pruned automatically). Showing %d per page.', 'kd-bonus' ), KD_Bonus_Rewards::MAX_EVENT_LOG_ROWS, $per_page ) ); ?></p>
+
+		<form method="get" style="margin: 12px 0 16px;">
+			<input type="hidden" name="page" value="<?php echo esc_attr( isset( $_GET['page'] ) ? sanitize_text_field( wp_unslash( $_GET['page'] ) ) : '' ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended ?>">
+			<label for="kd-bonus-per-page-tab"><?php esc_html_e( 'Logs per page:', 'kd-bonus' ); ?></label>
+			<select id="kd-bonus-per-page-tab" name="per_page" onchange="this.form.submit()">
+				<?php foreach ( $allowed_per_page as $option ) : ?>
+					<option value="<?php echo esc_attr( $option ); ?>" <?php selected( $per_page, $option ); ?>>
+						<?php echo esc_html( number_format_i18n( $option ) ); ?>
+					</option>
+				<?php endforeach; ?>
+			</select>
+			<input type="hidden" name="paged" value="1">
+		</form>
+
 		<?php if ( empty( $events ) ) : ?>
 			<p><?php esc_html_e( 'No reward events recorded yet.', 'kd-bonus' ); ?></p>
 		<?php else : ?>
@@ -975,7 +993,7 @@ class KD_Bonus_Settings {
 						echo wp_kses_post(
 							paginate_links(
 								array(
-									'base'      => add_query_arg( 'paged', '%#%' ),
+									'base'      => add_query_arg( array( 'per_page' => $per_page, 'paged' => '%#%' ) ),
 									'format'    => '',
 									'current'   => $page,
 									'total'     => $total_pages,
