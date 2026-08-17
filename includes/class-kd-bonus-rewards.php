@@ -429,7 +429,7 @@ class KD_Bonus_Rewards {
 			return sprintf( '%1$s (%2$s)', $user->user_login, $user->user_email );
 		}
 
-		return sprintf( '#%d', (int) $user_id );
+		return sprintf( __( 'User #%d', 'kd-bonus' ), (int) $user_id );
 	}
 
 	/**
@@ -868,16 +868,13 @@ class KD_Bonus_Rewards {
 	private function get_users_with_rewards_total_count() {
 		global $wpdb;
 
+		$latest_balance_subquery = $this->get_latest_balance_meta_subquery();
+
 		return (int) $wpdb->get_var(
 			$wpdb->prepare(
 				"SELECT COUNT(*)
 				FROM {$wpdb->usermeta} AS usermeta
-				INNER JOIN (
-					SELECT user_id, MAX(umeta_id) AS latest_umeta_id
-					FROM {$wpdb->usermeta}
-					WHERE meta_key = %s
-					GROUP BY user_id
-				) AS latest_balance ON latest_balance.latest_umeta_id = usermeta.umeta_id
+				INNER JOIN ({$latest_balance_subquery}) AS latest_balance ON latest_balance.latest_umeta_id = usermeta.umeta_id
 				INNER JOIN {$wpdb->users} AS users ON users.ID = usermeta.user_id
 				WHERE usermeta.meta_key = %s
 					AND CAST(usermeta.meta_value AS DECIMAL(18,4)) <> 0",
@@ -899,16 +896,12 @@ class KD_Bonus_Rewards {
 
 		$per_page = max( 1, (int) $per_page );
 		$offset   = max( 0, ( max( 1, (int) $page ) - 1 ) * $per_page );
+		$latest_balance_subquery = $this->get_latest_balance_meta_subquery();
 		$rows     = $wpdb->get_results(
 			$wpdb->prepare(
 				"SELECT usermeta.user_id
 				FROM {$wpdb->usermeta} AS usermeta
-				INNER JOIN (
-					SELECT user_id, MAX(umeta_id) AS latest_umeta_id
-					FROM {$wpdb->usermeta}
-					WHERE meta_key = %s
-					GROUP BY user_id
-				) AS latest_balance ON latest_balance.latest_umeta_id = usermeta.umeta_id
+				INNER JOIN ({$latest_balance_subquery}) AS latest_balance ON latest_balance.latest_umeta_id = usermeta.umeta_id
 				INNER JOIN {$wpdb->users} AS users ON users.ID = usermeta.user_id
 				WHERE usermeta.meta_key = %s
 					AND CAST(usermeta.meta_value AS DECIMAL(18,4)) <> 0
@@ -922,6 +915,24 @@ class KD_Bonus_Rewards {
 		);
 
 		return array_map( 'absint', wp_list_pluck( $rows, 'user_id' ) );
+	}
+
+	/**
+	 * Build the subquery that resolves each user's latest stored balance meta row.
+	 *
+	 * update_user_meta() rewrites a single current value, and usermeta IDs are
+	 * auto-incremented, so MAX(umeta_id) gives the newest stored kd_bonus_balance
+	 * row when duplicate rows exist from older data.
+	 *
+	 * @return string
+	 */
+	private function get_latest_balance_meta_subquery() {
+		global $wpdb;
+
+		return "SELECT user_id, MAX(umeta_id) AS latest_umeta_id
+			FROM {$wpdb->usermeta}
+			WHERE meta_key = %s
+			GROUP BY user_id";
 	}
 
 	/**
@@ -2268,7 +2279,11 @@ class KD_Bonus_Rewards {
 		$total_users = $this->get_users_with_rewards_total_count();
 		$total_pages = max( 1, (int) ceil( $total_users / $per_page ) );
 		$page        = min( $page, $total_pages );
-		$user_ids    = $this->get_users_with_rewards_page_user_ids( $per_page, $page );
+		$user_ids    = array();
+
+		if ( $total_users > 0 ) {
+			$user_ids = $this->get_users_with_rewards_page_user_ids( $per_page, $page );
+		}
 		$user_map    = self::get_network_users_by_ids( $user_ids );
 		$query_results = array();
 
