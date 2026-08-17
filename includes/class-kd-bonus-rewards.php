@@ -2201,6 +2201,7 @@ class KD_Bonus_Rewards {
 		$total_pages      = max( 1, (int) ceil( $total_users / $per_page ) );
 		$balance_decimals = function_exists( 'wc_get_price_decimals' ) ? wc_get_price_decimals() : 2;
 		$base_currency    = $this->get_base_currency();
+		$date_time_format = get_option( 'date_format' ) . ' ' . get_option( 'time_format' );
 		?>
 		<div class="wrap">
 			<h1><?php esc_html_e( 'Accounts with Rewards', 'kd-bonus' ); ?></h1>
@@ -2252,7 +2253,7 @@ class KD_Bonus_Rewards {
 									<?php
 									echo esc_html(
 										$last_activity
-											? wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), strtotime( $last_activity->created_at . ' UTC' ) )
+											? wp_date( $date_time_format, strtotime( $last_activity->created_at . ' UTC' ) )
 											: '—'
 									);
 									?>
