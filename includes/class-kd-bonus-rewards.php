@@ -2183,10 +2183,17 @@ class KD_Bonus_Rewards {
 				'meta_type'   => 'DECIMAL',
 				'blog_id'     => 0,
 				'meta_query'  => array(
+					'relation' => 'OR',
 					array(
 						'key'     => self::BALANCE_META,
 						'value'   => 0,
-						'compare' => '!=',
+						'compare' => '>',
+						'type'    => 'DECIMAL',
+					),
+					array(
+						'key'     => self::BALANCE_META,
+						'value'   => 0,
+						'compare' => '<',
 						'type'    => 'DECIMAL',
 					),
 				),
@@ -2246,7 +2253,7 @@ class KD_Bonus_Rewards {
 							$last_activity     = $user_data['last_activity'];
 							$first_name        = trim( (string) $user->first_name );
 							$last_name         = trim( (string) $user->last_name );
-							$user_name         = trim( $first_name . ' ' . $last_name );
+							$user_name         = trim( implode( ' ', array_filter( array( $first_name, $last_name ) ) ) );
 							if ( '' === $user_name ) {
 								$user_name = '' !== $user->display_name ? $user->display_name : sprintf( __( 'User #%d', 'kd-bonus' ), $user->ID );
 							}
