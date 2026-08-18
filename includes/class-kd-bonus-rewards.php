@@ -143,6 +143,9 @@ class KD_Bonus_Rewards {
 		add_action( 'woocommerce_order_status_changed', array( $this, 'handle_order_status_change' ), 20, 4 );
 		add_action( 'woocommerce_order_status_cancelled', array( $this, 'handle_order_reversal' ) );
 		add_action( 'woocommerce_order_status_refunded', array( $this, 'handle_order_reversal' ) );
+		add_action( 'woocommerce_applied_coupon', array( $this, 'handle_coupon_reward_conflict' ) );
+		add_action( 'wp_ajax_kd_bonus_remove_rewards_session', array( $this, 'ajax_remove_rewards_session' ) );
+		add_action( 'wp_ajax_nopriv_kd_bonus_remove_rewards_session', array( $this, 'ajax_remove_rewards_session' ) );
 	}
 
 	/**
@@ -1538,6 +1541,76 @@ class KD_Bonus_Rewards {
 			</form>
 		</div>
 		<?php
+		// When coupon+reward compatibility is disabled and KD rewards are currently applied,
+		// output JS to intercept coupon form submission and show the OK/Cancel prompt.
+		if ( empty( $settings['allow_coupon_with_rewards'] ) && $applied_base > 0 ) :
+			$nonce    = wp_create_nonce( 'kd_bonus_remove_rewards' );
+			$ajax_url = admin_url( 'admin-ajax.php' );
+			?>
+		<script>
+		(function () {
+			'use strict';
+			var ajaxUrl  = <?php echo wp_json_encode( $ajax_url ); ?>;
+			var nonce    = <?php echo wp_json_encode( $nonce ); ?>;
+			var promptMsg    = <?php echo wp_json_encode( __( "You cannot use KD\$ Bonus and Discount Code simultaneously.\n\n1. If you want to use Discount Code and save your KD\$ for later use, click OK\n2. If you want to use KD\$ Rewards for this order, click Cancel", 'kd-bonus' ) ); ?>;
+			var couponNotice = <?php echo wp_json_encode( __( 'KD$ Bonus rewards have been removed so the coupon can be applied.', 'kd-bonus' ) ); ?>;
+			var removeNotice = <?php echo wp_json_encode( __( 'Coupon removed. Your KD$ Bonus rewards are still applied.', 'kd-bonus' ) ); ?>;
+
+			function attachCouponInterceptor() {
+				// WooCommerce coupon form on the checkout page.
+				var couponForm = document.querySelector( 'form.checkout_coupon, .woocommerce-form-coupon' );
+				if ( ! couponForm || couponForm.dataset.kdBonusIntercepted ) {
+					return;
+				}
+				couponForm.dataset.kdBonusIntercepted = '1';
+
+				function handleCouponSubmit( e ) {
+					e.preventDefault();
+					e.stopImmediatePropagation();
+
+					var confirmed = window.confirm( promptMsg );
+
+					if ( confirmed ) {
+						// OK: remove KD rewards from session, then let the coupon go through.
+						var data = new URLSearchParams();
+						data.append( 'action', 'kd_bonus_remove_rewards_session' );
+						data.append( 'nonce', nonce );
+
+						fetch( ajaxUrl, {
+							method: 'POST',
+							headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+							body: data.toString()
+						} ).then( function () {
+							// Re-submit the coupon form without our interceptor.
+							couponForm.removeEventListener( 'submit', handleCouponSubmit );
+							couponForm.dataset.kdBonusIntercepted = '';
+							couponForm.submit();
+						} );
+					} else {
+						// Cancel: keep KD rewards, remove any coupon code the user typed.
+						var couponInput = couponForm.querySelector( 'input[name="coupon_code"]' );
+						if ( couponInput ) {
+							couponInput.value = '';
+						}
+						if ( typeof jQuery !== 'undefined' && jQuery.fn.trigger ) {
+							jQuery( document.body ).trigger( 'update_checkout' );
+						}
+						alert( removeNotice );
+					}
+				}
+
+				couponForm.addEventListener( 'submit', handleCouponSubmit );
+			}
+
+			// Attach on DOM ready and re-attach after WooCommerce checkout updates (which re-render the coupon form).
+			document.addEventListener( 'DOMContentLoaded', attachCouponInterceptor );
+			if ( typeof jQuery !== 'undefined' ) {
+				jQuery( document.body ).on( 'updated_checkout', attachCouponInterceptor );
+			}
+		}());
+		</script>
+		<?php
+		endif;
 	}
 
 	/**
@@ -1554,6 +1627,16 @@ class KD_Bonus_Rewards {
 			return;
 		}
 
+		// When coupons and rewards are not allowed together, skip applying the reward fee if any coupon is present.
+		$settings = $this->get_reward_settings();
+		if ( empty( $settings['allow_coupon_with_rewards'] ) ) {
+			$coupons = $cart->get_applied_coupons();
+			if ( ! empty( $coupons ) ) {
+				WC()->session->__unset( self::SESSION_REDEMPTION_KEY );
+				return;
+			}
+		}
+
 		$base_amount = $this->get_session_redemption_base();
 		if ( $base_amount <= 0 ) {
 			return;
@@ -1568,6 +1651,43 @@ class KD_Bonus_Rewards {
 		}
 
 		$cart->add_fee( __( 'KD Bonus Credit', 'kd-bonus' ), -1 * $applied_amount, false );
+	}
+
+	/**
+	 * Server-side conflict handler: when a coupon is applied and rewards+coupons are
+	 * not allowed together, automatically clear the KD rewards session key.
+	 *
+	 * @param string $coupon_code The coupon code just applied.
+	 */
+	public function handle_coupon_reward_conflict( $coupon_code ) {
+		$settings = $this->get_reward_settings();
+		if ( ! empty( $settings['allow_coupon_with_rewards'] ) ) {
+			return;
+		}
+
+		if ( ! WC()->session ) {
+			return;
+		}
+
+		$applied_base = $this->get_session_redemption_base();
+		if ( $applied_base > 0 ) {
+			WC()->session->__unset( self::SESSION_REDEMPTION_KEY );
+		}
+	}
+
+	/**
+	 * AJAX handler: remove KD rewards from the session so a coupon can be used instead.
+	 */
+	public function ajax_remove_rewards_session() {
+		if ( ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['nonce'] ?? '' ) ), 'kd_bonus_remove_rewards' ) ) {
+			wp_send_json_error( array( 'message' => __( 'Security check failed.', 'kd-bonus' ) ) );
+		}
+
+		if ( WC()->session ) {
+			WC()->session->__unset( self::SESSION_REDEMPTION_KEY );
+		}
+
+		wp_send_json_success();
 	}
 
 	/**

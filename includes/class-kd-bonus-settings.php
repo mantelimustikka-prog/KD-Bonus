@@ -205,6 +205,7 @@ class KD_Bonus_Settings {
 			'reward_expiry_notification_days' => 0,
 			'reward_new_user'            => 0,
 			'new_user_reward_amount'     => 0,
+			'allow_coupon_with_rewards'  => 1,
 			'reward_name'                => 'Kamagra Dollar',
 			'reward_symbol'              => '$KD',
 			'base_currency'              => '',
@@ -336,6 +337,7 @@ class KD_Bonus_Settings {
 				$settings['reward_expiry_notification_days'] = max( 0, absint( wp_unslash( $_POST['reward_expiry_notification_days'] ?? 0 ) ) );
 				$settings['reward_new_user']            = ! empty( $_POST['reward_new_user'] ) ? 1 : 0;
 				$settings['new_user_reward_amount']     = max( 0, (float) wp_unslash( $_POST['new_user_reward_amount'] ?? 0 ) );
+				$settings['allow_coupon_with_rewards']  = ! empty( $_POST['allow_coupon_with_rewards'] ) ? 1 : 0;
 				if ( $rebuild_requested ) {
 					do_action( 'kd_bonus_request_membership_rebuild', get_current_user_id(), $reset_enabled );
 				}
@@ -493,6 +495,10 @@ class KD_Bonus_Settings {
 				</select>
 				<p class="description"><?php esc_html_e( 'Reward points are awarded automatically when an order reaches the selected WooCommerce status.', 'kd-bonus' ); ?></p>
 			</td>
+		</tr>
+		<tr>
+			<th scope="row"><?php esc_html_e( 'Allow using other coupon/discount code', 'kd-bonus' ); ?></th>
+			<td><label><input name="allow_coupon_with_rewards" type="checkbox" value="1" <?php checked( ! empty( $settings['allow_coupon_with_rewards'] ) ); ?> /> <?php esc_html_e( 'Allow customers to use KD$ Bonus rewards together with WooCommerce coupon/discount codes. When unchecked, reward points and coupons cannot be used simultaneously at checkout.', 'kd-bonus' ); ?></label></td>
 		</tr>
 		<tr>
 			<th scope="row"><label for="reward_expiry_days"><?php esc_html_e( 'Reward Expiry (Days)', 'kd-bonus' ); ?></label></th>
