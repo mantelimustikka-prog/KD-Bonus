@@ -984,7 +984,19 @@ class KD_Bonus_Settings {
 								<td><?php echo esc_html( (string) $event->site_id ); ?></td>
 								<td><?php echo esc_html( (string) $event->order_id ); ?></td>
 								<td><?php echo esc_html( ucwords( str_replace( '_', ' ', $event->type ) ) ); ?></td>
-								<td><?php echo esc_html( number_format_i18n( (float) $event->amount, 2 ) ); ?></td>
+								<td>
+								<?php
+								$amount_val = (float) $event->amount;
+								$amount_str = esc_html( number_format_i18n( $amount_val, 2 ) );
+								if ( $amount_val < 0 ) {
+									echo '<strong style="color:#c00;">' . $amount_str . '</strong>';
+								} elseif ( $amount_val > 0 ) {
+									echo '<strong style="color:#060;">' . $amount_str . '</strong>';
+								} else {
+									echo '<strong>' . $amount_str . '</strong>';
+								}
+								?>
+							</td>
 								<td><?php echo esc_html( number_format_i18n( (float) $event->balance_after, 2 ) ); ?></td>
 								<td><?php echo esc_html( $event->currency ); ?></td>
 								<td><?php echo esc_html( $event->description ); ?></td>
