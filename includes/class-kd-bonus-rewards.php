@@ -2333,7 +2333,19 @@ class KD_Bonus_Rewards {
 									?>
 								</td>
 								<td><?php echo esc_html( $this->format_reward_event_type_label( $event->type ) ); ?></td>
-								<td><?php echo esc_html( $this->format_reward_amount( (float) $event->amount ) ); ?></td>
+								<td>
+								<?php
+								$amount_val = (float) $event->amount;
+								$amount_str = esc_html( $this->format_reward_amount( $amount_val ) );
+								if ( $amount_val < 0 ) {
+										echo '<strong style="color:#c00;">' . $amount_str . '</strong>';
+									} elseif ( $amount_val > 0 ) {
+										echo '<strong style="color:#060;">' . $amount_str . '</strong>';
+									} else {
+										echo '<strong>' . $amount_str . '</strong>';
+									}
+									?>
+								</td>
 								<td><?php echo esc_html( $this->format_reward_amount( (float) $event->balance_after ) ); ?></td>
 								<td><?php echo esc_html( $event->order_id ? '#' . (int) $event->order_id : '—' ); ?></td>
 								<td>
